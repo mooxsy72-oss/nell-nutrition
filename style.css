@@ -1,39 +1,75 @@
 /* ═══════════════════════════════════════════════════════════════
-   NUTRITION FRAMEWORK — Stage 1 v2
+   NUTRITION FRAMEWORK — UI v2 (Reference-based dark gold theme)
    ═══════════════════════════════════════════════════════════════ */
 
 :root {
-    --nn-bg: #1a1a2e;
-    --nn-bg-card: #16213e;
-    --nn-bg-section: #0f3460;
-    --nn-border: #1a3a5c;
-    --nn-text: #e0e0e0;
-    --nn-text-dim: #8899aa;
-    --nn-accent: #4fc3f7;
-    --nn-accent-glow: rgba(79, 195, 247, 0.3);
+    /* ─── Core palette ─── */
+    --nn-bg: #0d0f14;
+    --nn-bg-card: #141820;
+    --nn-bg-section: #1a1f2a;
+    --nn-bg-hover: #1e2430;
+    --nn-border: #2a3040;
+    --nn-border-accent: #3d4a2a;
 
-    --nn-bar-good: linear-gradient(90deg, #43a047, #66bb6a);
-    --nn-bar-warn: linear-gradient(90deg, #f9a825, #ffca28);
-    --nn-bar-danger: linear-gradient(90deg, #e53935, #ef5350);
-    --nn-bar-overfill: linear-gradient(90deg, #7b1fa2, #ab47bc);
+    /* ─── Text ─── */
+    --nn-text: #e8e4dc;
+    --nn-text-dim: #7a8090;
+    --nn-text-muted: #505868;
 
-    --nn-radius: 14px;
+    /* ─── Accent (gold/amber) ─── */
+    --nn-accent: #c8a84b;
+    --nn-accent-dim: #8a7a3a;
+    --nn-accent-glow: rgba(200, 168, 75, 0.2);
+    --nn-accent-glow-strong: rgba(200, 168, 75, 0.4);
+
+    /* ─── Status colors ─── */
+    --nn-green: #5a9a4a;
+    --nn-green-bright: #7bc96a;
+    --nn-blue: #4a8ab8;
+    --nn-blue-bright: #5ca8d8;
+    --nn-orange: #c8884a;
+    --nn-orange-bright: #e8a85a;
+    --nn-red: #b84a4a;
+    --nn-red-bright: #d85a5a;
+    --nn-purple: #8a5ab8;
+
+    /* ─── Bar gradients ─── */
+    --nn-bar-good: linear-gradient(90deg, #4a7a3a, #6aaa5a);
+    --nn-bar-warn: linear-gradient(90deg, #b8884a, #d8a85a);
+    --nn-bar-danger: linear-gradient(90deg, #a83a3a, #c85a5a);
+    --nn-bar-overfill: linear-gradient(90deg, #7a3ab8, #9a5ad8);
+    --nn-bar-hydration: linear-gradient(90deg, #3a6a9a, #5a9ad8);
+    --nn-bar-energy: linear-gradient(90deg, #9a7a2a, #c8a84b);
+    --nn-bar-health: linear-gradient(90deg, #3a8a5a, #5ab87a);
+
+    /* ─── Geometry ─── */
+    --nn-radius: 16px;
+    --nn-radius-md: 12px;
     --nn-radius-sm: 8px;
-    --nn-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 20px rgba(79, 195, 247, 0.1);
+    --nn-radius-xs: 5px;
+
+    /* ─── Shadows ─── */
+    --nn-shadow: 0 12px 48px rgba(0, 0, 0, 0.6), 0 0 1px rgba(200, 168, 75, 0.1);
+    --nn-shadow-section: 0 2px 12px rgba(0, 0, 0, 0.3);
+    --nn-shadow-glow: 0 0 20px rgba(200, 168, 75, 0.15);
+
+    /* ─── Transitions ─── */
     --nn-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --nn-transition-fast: 0.15s ease;
 }
 
+/* ─── UTILITY ──────────────────────────────────────────────── */
 .nn-hidden { display: none !important; }
 
-/* ─── TOGGLE BUTTON ────────────────────────────────────────── */
+/* ─── TOGGLE BUTTON (🍎 near send) ────────────────────────── */
 #nn-toggle {
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
     border-radius: 50%;
-    border: 2px solid var(--nn-accent);
-    background: var(--nn-bg);
+    border: 1.5px solid var(--nn-accent-dim);
+    background: var(--nn-bg-card);
     color: var(--nn-accent);
-    font-size: 18px;
+    font-size: 17px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -49,10 +85,9 @@
     user-select: none;
 }
 #nn-toggle:hover {
-    background: var(--nn-accent);
-    color: var(--nn-bg);
-    box-shadow: 0 0 16px var(--nn-accent-glow);
-    transform: scale(1.1);
+    border-color: var(--nn-accent);
+    box-shadow: 0 0 16px var(--nn-accent-glow-strong);
+    transform: scale(1.08);
 }
 #nn-toggle:active { transform: scale(0.92); }
 .nn-toggle-icon { line-height: 1; pointer-events: none; }
@@ -63,12 +98,12 @@
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    padding: 6px 14px;
+    gap: 14px;
+    padding: 5px 14px;
     background: var(--nn-bg-card);
     border: 1px solid var(--nn-border);
     border-radius: var(--nn-radius-sm);
-    margin: 0 8px 6px 8px;
+    margin: 0 8px 5px 8px;
     cursor: pointer;
     transition: var(--nn-transition);
     z-index: 40;
@@ -79,429 +114,22 @@
     user-select: none;
 }
 #nn-minibar:hover {
-    border-color: var(--nn-accent);
-    box-shadow: 0 0 12px var(--nn-accent-glow);
+    border-color: var(--nn-accent-dim);
+    box-shadow: 0 0 10px var(--nn-accent-glow);
 }
 .nn-mini-row {
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     color: var(--nn-text);
     white-space: nowrap;
 }
-.nn-mini-icon { font-size: 0.85rem; }
+.nn-mini-icon { font-size: 0.82rem; }
 .nn-mini-val { font-weight: 600; color: var(--nn-accent); }
 
-/* ─── CARD ─────────────────────────────────────────────────── */
-#nn-card {
-    position: fixed;
-    z-index: 10000;
-    color: var(--nn-text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    pointer-events: auto;
-    animation: nn-slide-up 0.28s ease-out;
-
-    /* Desktop default position */
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(700px, 94vw);
-    max-height: 80vh;
-    overflow-y: auto;
-
-    background: var(--nn-bg-card);
-    border: 1px solid var(--nn-border);
-    border-radius: var(--nn-radius);
-    box-shadow: var(--nn-shadow);
-}
-
-@keyframes nn-slide-up {
-    from { opacity: 0; transform: translate(-50%, -46%) scale(0.95); }
-    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-}
-
-/* Top bar */
-.nn-card-topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: linear-gradient(135deg, var(--nn-bg-section), var(--nn-bg));
-    border-bottom: 1px solid var(--nn-border);
-    border-radius: var(--nn-radius) var(--nn-radius) 0 0;
-    position: sticky;
-    top: 0;
-    z-index: 5;
-}
-.nn-card-topbar-title {
-    font-size: 0.72rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--nn-accent);
-}
-.nn-card-drag-handle {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--nn-text-dim);
-    font-size: 1.1rem;
-    cursor: grab;
-    border-radius: 6px;
-    user-select: none;
-    touch-action: none;
-    transition: color 0.2s, background 0.2s;
-}
-.nn-card-drag-handle:hover { color: var(--nn-accent); background: rgba(79,195,247,0.1); }
-.nn-card-drag-handle:active { cursor: grabbing; }
-
-.nn-card-close {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: none;
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--nn-text-dim);
-    font-size: 14px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: var(--nn-transition);
-    pointer-events: auto;
-    touch-action: manipulation;
-}
-.nn-card-close:hover { background: rgba(229, 57, 53, 0.3); color: #ef5350; }
-
-/* Columns */
-.nn-card-columns {
-    display: flex;
-    flex-direction: row;
-    gap: 0;
-    padding: 12px 14px;
-}
-.nn-card-col {
-    flex: 1;
-    min-width: 0;
-    padding: 0 10px;
-}
-.nn-card-col + .nn-card-col {
-    border-left: 1px solid var(--nn-border);
-}
-
-/* Character header */
-.nn-card-char-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
-}
-.nn-card-avatar-wrap {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    overflow: hidden;
-    border: 2px solid var(--nn-accent);
-    flex-shrink: 0;
-    box-shadow: 0 0 8px var(--nn-accent-glow);
-}
-.nn-card-avatar {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-.nn-card-char-name {
-    font-weight: 700;
-    font-size: 0.82rem;
-    color: var(--nn-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* Indicators */
-.nn-card-indicators {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-.nn-indicator {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-}
-.nn-indicator-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.68rem;
-    color: var(--nn-text-dim);
-}
-.nn-indicator-top span:last-child {
-    font-weight: 600;
-    color: var(--nn-text);
-    font-size: 0.66rem;
-}
-.nn-bar {
-    height: 6px;
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 3px;
-    overflow: hidden;
-}
-.nn-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-}
-.nn-bar-fill::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%);
-    animation: nn-shimmer 2.5s infinite;
-    border-radius: 3px;
-}
-@keyframes nn-shimmer {
-    0%   { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
-}
-
-/* Weight row */
-.nn-weight-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 0.7rem;
-    color: var(--nn-text);
-    padding-top: 4px;
-    border-top: 1px solid rgba(255,255,255,0.05);
-    margin-top: 4px;
-}
-.nn-pregnant-badge {
-    font-size: 0.62rem;
-    background: rgba(233, 30, 99, 0.15);
-    border: 1px solid rgba(233, 30, 99, 0.3);
-    border-radius: 10px;
-    padding: 2px 8px;
-    color: #f48fb1;
-}
-
-/* Sections */
-.nn-card-sections {
-    padding: 6px 14px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-.nn-section {
-    background: rgba(255,255,255,0.02);
-    border: 1px solid var(--nn-border);
-    border-radius: var(--nn-radius-sm);
-    padding: 8px 10px;
-}
-.nn-section-title {
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: var(--nn-accent);
-    margin-bottom: 4px;
-}
-.nn-section-body {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-.nn-empty {
-    font-size: 0.66rem;
-    color: var(--nn-text-dim);
-    font-style: italic;
-}
-
-/* Disease items */
-.nn-disease-item {
-    padding: 5px 8px;
-    border-radius: 5px;
-    font-size: 0.7rem;
-    border-left: 3px solid;
-}
-.nn-disease-top {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-.nn-disease-name { font-weight: 600; }
-.nn-disease-owner, .nn-buff-owner, .nn-debuff-owner {
-    font-size: 0.58rem;
-    color: var(--nn-text-dim);
-    background: rgba(255,255,255,0.05);
-    padding: 1px 6px;
-    border-radius: 8px;
-}
-.nn-disease-severity {
-    font-size: 0.58rem;
-    text-transform: uppercase;
-    opacity: 0.7;
-    margin-left: auto;
-}
-.nn-disease-effects {
-    margin-top: 2px;
-    font-size: 0.62rem;
-    color: var(--nn-text-dim);
-}
-
-.nn-severity-mild     { background: rgba(249,168,37,0.08);  border-left-color: #f9a825; }
-.nn-severity-moderate { background: rgba(255,152,0,0.1);    border-left-color: #ff9800; }
-.nn-severity-severe   { background: rgba(229,57,53,0.1);    border-left-color: #e53935; }
-.nn-severity-critical {
-    background: rgba(183,28,28,0.15);
-    border-left-color: #b71c1c;
-    animation: nn-pulse-danger 1.5s infinite;
-}
-@keyframes nn-pulse-danger {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(229,57,53,0); }
-    50%      { box-shadow: 0 0 8px 2px rgba(229,57,53,0.3); }
-}
-
-/* Buffs / Debuffs */
-.nn-buff-item, .nn-debuff-item {
-    font-size: 0.7rem;
-    padding: 3px 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-.nn-buff-time {
-    font-size: 0.58rem;
-    color: var(--nn-text-dim);
-    margin-left: auto;
-}
-.nn-debuff-effects {
-    width: 100%;
-    font-size: 0.62rem;
-    color: #ef5350;
-    margin-top: 2px;
-}
-
-/* Settings */
-.nn-set-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 6px 0;
-    flex-wrap: wrap;
-}
-.nn-set-debug { gap: 6px; }
-.nn-set-debug .menu_button { font-size: 0.72rem; padding: 4px 10px; }
-
-/* Scrollbar */
-#nn-card::-webkit-scrollbar { width: 4px; }
-#nn-card::-webkit-scrollbar-track { background: transparent; }
-#nn-card::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
-
-/* ─── MOBILE ───────────────────────────────────────────────── */
-@media (max-width: 768px) {
-    #nn-card {
-        top: 50% !important;
-        left: 50% !important;
-        right: auto !important;
-        bottom: auto !important;
-        transform: translate(-50%, -50%) !important;
-        width: 94vw !important;
-        max-height: 78dvh !important;
-        border-radius: 14px !important;
-        z-index: 99999 !important;
-    }
-
-    .nn-card-columns {
-        flex-direction: column;
-        padding: 10px 10px;
-    }
-    .nn-card-col + .nn-card-col {
-        border-left: none;
-        border-top: 1px solid var(--nn-border);
-        padding-top: 10px;
-        margin-top: 10px;
-    }
-    .nn-card-col { padding: 0; }
-
-    .nn-card-drag-handle { display: none; }
-
-    #nn-minibar {
-        margin: 0 4px 4px 4px;
-        padding: 5px 10px;
-        gap: 8px;
-    }
-    .nn-mini-row { font-size: 0.7rem; }
-
-    #nn-toggle {
-        width: 36px;
-        height: 36px;
-        font-size: 16px;
-    }
-
-    .nn-card-close {
-        width: 32px;
-        height: 32px;
-        font-size: 16px;
-    }
-}
 /* ═══════════════════════════════════════════════════════════════
-   МОБИЛЬНЫЙ ФИКС: КАРТОЧКА ЦЕНТРИРУЕТСЯ ПРАВИЛЬНО
-   ═══════════════════════════════════════════════════════════════ */
-@media (max-width: 768px) {
-    /* Карточка на мобилке: фиксированная позиция от ЭКРАНА, не от родителя */
-    #nn-card {
-        position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        right: auto !important;
-        bottom: auto !important;
-        transform: translate(-50%, -50%) !important;
-        width: 94vw !important;
-        max-width: 94vw !important;
-        max-height: 76dvh !important;
-        height: auto !important;
-        margin: 0 !important;
-        z-index: 100000 !important;
-        border-radius: 14px !important;
-        overflow-y: auto !important;
-        overflow-x: hidden !important;
-    }
-
-    /* Убиваем анимацию открытия — она тоже может сбивать transform */
-    #nn-card:not(.nn-hidden) {
-        animation: none !important;
-    }
-
-    /* Кнопка и мини-бар — гарантируем кликабельность */
-    #nn-toggle,
-    #nn-minibar {
-        pointer-events: auto !important;
-        touch-action: manipulation !important;
-        position: relative !important;
-        z-index: 100 !important;
-    }
-
-    /* Крестик закрытия — крупнее для пальца */
-    #nn-card .nn-card-close {
-        width: 34px !important;
-        height: 34px !important;
-        font-size: 16px !important;
-        pointer-events: auto !important;
-        touch-action: manipulation !important;
-    }
-
-    /* Ручка перетаскивания — прячем на мобилке */
-    #nn-card .nn-card-drag-handle {
-        display: none !important;
-    }
-}
-/* ═══════════════════════════════════════════════════════════════
-   ОБЁРТКА КАРТОЧКИ — ГАРАНТИРОВАННОЕ ЦЕНТРИРОВАНИЕ
+   MAIN CARD
    ═══════════════════════════════════════════════════════════════ */
 #nn-card-wrapper {
     position: fixed;
@@ -516,23 +144,674 @@
     z-index: 100000;
     pointer-events: none;
 }
-
-/* Карточка внутри обёртки — кликабельна */
 #nn-card-wrapper #nn-card {
     pointer-events: auto;
 }
-
-/* Когда карточка скрыта — обёртка тоже не мешает */
 #nn-card-wrapper:has(.nn-hidden) {
     display: none;
 }
-
-/* Fallback если :has() не поддерживается */
 #nn-card.nn-hidden {
     display: none !important;
 }
 
+#nn-card {
+    position: fixed;
+    z-index: 100000;
+    color: var(--nn-text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+    pointer-events: auto;
+
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(920px, 94vw);
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    background: var(--nn-bg);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius);
+    box-shadow: var(--nn-shadow);
+
+    animation: nn-appear 0.25s ease-out;
+}
+
+@keyframes nn-appear {
+    from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ─── CARD HEADER ──────────────────────────────────────────── */
+.nn-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--nn-border);
+    background: linear-gradient(180deg, rgba(200,168,75,0.03) 0%, transparent 100%);
+    flex-shrink: 0;
+}
+.nn-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.nn-header-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--nn-text);
+    letter-spacing: 0.02em;
+}
+.nn-header-sparkle {
+    color: var(--nn-accent);
+    font-size: 0.85rem;
+}
+.nn-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.nn-header-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--nn-border);
+    background: transparent;
+    color: var(--nn-text-dim);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-header-btn:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+    background: rgba(200,168,75,0.05);
+}
+
+/* ─── TABS ─────────────────────────────────────────────────── */
+.nn-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--nn-border);
+    background: var(--nn-bg-card);
+    flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.nn-tabs::-webkit-scrollbar { display: none; }
+
+.nn-tab {
+    padding: 10px 16px;
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: var(--nn-text-dim);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+    white-space: nowrap;
+    position: relative;
+}
+.nn-tab:hover {
+    color: var(--nn-text);
+}
+.nn-tab.nn-tab-active {
+    color: var(--nn-accent);
+    border-bottom-color: var(--nn-accent);
+}
+.nn-tab.nn-tab-active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 20%;
+    right: 20%;
+    height: 2px;
+    background: var(--nn-accent);
+    border-radius: 1px;
+    box-shadow: 0 0 8px var(--nn-accent-glow);
+}
+
+/* ─── CARD BODY (scrollable) ──────────────────────────────── */
+.nn-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.nn-body::-webkit-scrollbar { width: 4px; }
+.nn-body::-webkit-scrollbar-track { background: transparent; }
+.nn-body::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
+
+/* ─── DRAG HANDLE ──────────────────────────────────────────── */
+.nn-drag-handle {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nn-text-muted);
+    font-size: 1rem;
+    cursor: grab;
+    border-radius: 6px;
+    user-select: none;
+    touch-action: none;
+    transition: var(--nn-transition-fast);
+}
+.nn-drag-handle:hover { color: var(--nn-accent-dim); background: rgba(200,168,75,0.05); }
+.nn-drag-handle:active { cursor: grabbing; }
+
+/* ═══════════════════════════════════════════════════════════════
+   CHARACTER CARDS (User & Bot side by side)
+   ═══════════════════════════════════════════════════════════════ */
+.nn-chars-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.nn-char-card {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-md);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    transition: var(--nn-transition);
+}
+.nn-char-card:hover {
+    border-color: var(--nn-border-accent);
+    box-shadow: var(--nn-shadow-section);
+}
+
+/* Character header inside card */
+.nn-char-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.nn-char-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1.5px solid var(--nn-border);
+    flex-shrink: 0;
+    background: var(--nn-bg);
+}
+.nn-char-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.nn-char-avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    color: var(--nn-text-muted);
+    background: var(--nn-bg-card);
+}
+.nn-char-info {
+    flex: 1;
+    min-width: 0;
+}
+.nn-char-name {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--nn-text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-char-name-icon {
+    font-size: 0.7rem;
+    color: var(--nn-accent);
+}
+.nn-char-subtitle {
+    font-size: 0.64rem;
+    color: var(--nn-text-dim);
+    margin-top: 2px;
+}
+.nn-char-menu-btn {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--nn-text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--nn-transition-fast);
+}
+.nn-char-menu-btn:hover { color: var(--nn-text-dim); background: var(--nn-bg-hover); }
+
+/* ─── CALORIES BIG NUMBER ──────────────────────────────────── */
+.nn-cal-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nn-cal-numbers {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+.nn-cal-current {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--nn-text);
+    line-height: 1;
+}
+.nn-cal-sep {
+    font-size: 1rem;
+    color: var(--nn-text-muted);
+    margin: 0 2px;
+}
+.nn-cal-goal {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--nn-text-dim);
+}
+.nn-cal-unit {
+    font-size: 0.72rem;
+    color: var(--nn-text-muted);
+    margin-left: 6px;
+}
+.nn-cal-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.nn-cal-bar {
+    flex: 1;
+    height: 7px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.nn-cal-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--nn-bar-good);
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+}
+.nn-cal-bar-fill.nn-overfill { background: var(--nn-bar-overfill); }
+.nn-cal-bar-fill.nn-warn { background: var(--nn-bar-warn); }
+.nn-cal-bar-fill.nn-danger { background: var(--nn-bar-danger); }
+.nn-cal-pct {
+    font-size: 0.64rem;
+    color: var(--nn-text-dim);
+    min-width: 28px;
+    text-align: right;
+}
+
+/* ─── STAT BARS (satiety, hydration, energy, health) ───────── */
+.nn-stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nn-stat-row {
+    display: grid;
+    grid-template-columns: 18px 70px 1fr 32px;
+    align-items: center;
+    gap: 6px;
+}
+.nn-stat-icon {
+    font-size: 0.72rem;
+    text-align: center;
+}
+.nn-stat-label {
+    font-size: 0.68rem;
+    color: var(--nn-text-dim);
+}
+.nn-stat-bar {
+    height: 5px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.nn-stat-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+.nn-stat-bar-fill.nn-fill-satiety  { background: var(--nn-bar-good); }
+.nn-stat-bar-fill.nn-fill-water    { background: var(--nn-bar-hydration); }
+.nn-stat-bar-fill.nn-fill-energy   { background: var(--nn-bar-energy); }
+.nn-stat-bar-fill.nn-fill-health   { background: var(--nn-bar-health); }
+
+.nn-stat-val {
+    font-size: 0.64rem;
+    color: var(--nn-text);
+    text-align: right;
+    font-weight: 600;
+}
+
+/* ─── WEIGHT ROW ───────────────────────────────────────────── */
+.nn-weight-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+    font-size: 0.68rem;
+    color: var(--nn-text-dim);
+}
+.nn-weight-line b { color: var(--nn-text); font-weight: 600; }
+.nn-pregnancy-badge {
+    font-size: 0.6rem;
+    background: rgba(200,168,75,0.1);
+    border: 1px solid var(--nn-accent-dim);
+    border-radius: 10px;
+    padding: 2px 8px;
+    color: var(--nn-accent);
+    margin-left: auto;
+}
+
+/* ─── STATUS CIRCLE (Healthy / Stable) ─────────────────────── */
+.nn-status-circle-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+}
+.nn-status-circle {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 2.5px solid var(--nn-green);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    color: var(--nn-green);
+    position: relative;
+    box-shadow: 0 0 12px rgba(90, 154, 74, 0.2);
+    transition: var(--nn-transition);
+}
+.nn-status-circle.nn-status-warn {
+    border-color: var(--nn-orange);
+    color: var(--nn-orange);
+    box-shadow: 0 0 12px rgba(200, 136, 74, 0.2);
+}
+.nn-status-circle.nn-status-danger {
+    border-color: var(--nn-red);
+    color: var(--nn-red);
+    box-shadow: 0 0 12px rgba(184, 74, 74, 0.3);
+    animation: nn-pulse-status 2s infinite;
+}
+@keyframes nn-pulse-status {
+    0%, 100% { box-shadow: 0 0 12px rgba(184, 74, 74, 0.2); }
+    50%      { box-shadow: 0 0 20px rgba(184, 74, 74, 0.5); }
+}
+.nn-status-label {
+    font-size: 0.58rem;
+    color: var(--nn-text-dim);
+    text-align: center;
+}
+.nn-status-text {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--nn-text);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BOTTOM SECTIONS — Conditions, Buffs, Debuffs
+   ═══════════════════════════════════════════════════════════════ */
+.nn-sections-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+}
+
+.nn-section {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-md);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 120px;
+}
+.nn-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.nn-section-icon {
+    font-size: 0.78rem;
+}
+.nn-section-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--nn-text);
+}
+.nn-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+}
+.nn-section-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+.nn-section-footer-btn {
+    font-size: 0.62rem;
+    color: var(--nn-text-dim);
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: var(--nn-transition-fast);
+}
+.nn-section-footer-btn:hover { color: var(--nn-accent); }
+
+/* ─── CONDITION ITEMS ──────────────────────────────────────── */
+.nn-condition-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    border-radius: var(--nn-radius-xs);
+    border-left: 3px solid var(--nn-orange);
+    background: rgba(200, 136, 74, 0.05);
+}
+.nn-condition-item.nn-sev-severe {
+    border-left-color: var(--nn-red);
+    background: rgba(184, 74, 74, 0.05);
+}
+.nn-condition-item.nn-sev-critical {
+    border-left-color: #ff3333;
+    background: rgba(255, 51, 51, 0.08);
+    animation: nn-pulse-danger 1.8s infinite;
+}
+@keyframes nn-pulse-danger {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 51, 51, 0); }
+    50%      { box-shadow: 0 0 8px 2px rgba(255, 51, 51, 0.15); }
+}
+.nn-condition-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.nn-condition-name {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--nn-orange-bright);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nn-condition-item.nn-sev-severe .nn-condition-name { color: var(--nn-red-bright); }
+.nn-condition-time {
+    font-size: 0.58rem;
+    color: var(--nn-text-muted);
+}
+.nn-condition-effects {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.nn-condition-effect {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.62rem;
+}
+.nn-condition-effect-name { color: var(--nn-text-dim); }
+.nn-condition-effect-val { color: var(--nn-red); font-weight: 600; }
+
+/* ─── BUFF ITEMS ───────────────────────────────────────────── */
+.nn-buff-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+    gap: 6px;
+}
+.nn-buff-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-buff-icon {
+    font-size: 0.72rem;
+}
+.nn-buff-name {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--nn-green-bright);
+}
+.nn-buff-val {
+    font-size: 0.64rem;
+    color: var(--nn-green);
+    font-weight: 600;
+}
+
+/* ─── DEBUFF ITEMS ─────────────────────────────────────────── */
+.nn-debuff-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+    gap: 6px;
+}
+.nn-debuff-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-debuff-icon {
+    font-size: 0.72rem;
+}
+.nn-debuff-name {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--nn-red-bright);
+}
+.nn-debuff-val {
+    font-size: 0.64rem;
+    color: var(--nn-red);
+    font-weight: 600;
+}
+
+/* ─── EMPTY STATE ──────────────────────────────────────────── */
+.nn-empty {
+    font-size: 0.64rem;
+    color: var(--nn-text-muted);
+    font-style: italic;
+    text-align: center;
+    padding: 8px 0;
+}
+
+/* ─── FOOTER ───────────────────────────────────────────────── */
+.nn-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 18px;
+    border-top: 1px solid var(--nn-border);
+    background: var(--nn-bg-card);
+    flex-shrink: 0;
+    gap: 12px;
+}
+.nn-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.6rem;
+    color: var(--nn-text-muted);
+}
+.nn-footer-tip {
+    font-size: 0.6rem;
+    color: var(--nn-text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nn-footer-btn {
+    font-size: 0.6rem;
+    color: var(--nn-text-dim);
+    background: none;
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nn-footer-btn:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+}
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
+    /* Card wrapper */
+    #nn-card-wrapper {
+        align-items: flex-start;
+        padding-top: 2vh;
+    }
     #nn-card-wrapper #nn-card {
         position: relative !important;
         top: auto !important;
@@ -540,15 +819,109 @@
         right: auto !important;
         bottom: auto !important;
         transform: none !important;
-        width: 94vw !important;
-        max-height: 76dvh !important;
+        width: 96vw !important;
+        max-width: 96vw !important;
+        max-height: 88dvh !important;
+        height: auto !important;
+        margin: 0 !important;
         border-radius: 14px !important;
-        overflow-y: auto !important;
         animation: none !important;
+    }
+
+    /* Character cards stack vertically */
+    .nn-chars-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    /* Sections stack */
+    .nn-sections-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    /* Status circle repositions */
+    .nn-status-circle-wrap {
+        position: static;
+        flex-direction: row;
+        gap: 8px;
+        padding-top: 6px;
+    }
+    .nn-status-circle {
+        width: 40px;
+        height: 40px;
+        font-size: 0.9rem;
+    }
+
+    /* Tabs scroll */
+    .nn-tabs {
+        padding: 0 10px;
+    }
+    .nn-tab {
+        padding: 8px 12px;
+        font-size: 0.68rem;
+    }
+
+    /* Header */
+    .nn-header {
+        padding: 10px 12px;
+    }
+
+    /* Body */
+    .nn-body {
+        padding: 12px;
+    }
+
+    /* Footer */
+    .nn-footer {
+        padding: 6px 12px;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .nn-footer-tip { display: none; }
+
+    /* Drag handle hidden */
+    .nn-drag-handle { display: none !important; }
+
+    /* Toggle & minibar */
+    #nn-toggle {
+        width: 34px;
+        height: 34px;
+        font-size: 15px;
+    }
+    #nn-minibar {
+        margin: 0 4px 4px 4px;
+        padding: 4px 10px;
+        gap: 8px;
+    }
+
+    /* Close button bigger */
+    .nn-header-btn {
+        width: 34px;
+        height: 34px;
+        font-size: 15px;
+    }
+
+    /* Cal numbers smaller */
+    .nn-cal-current { font-size: 1.3rem; }
+    .nn-cal-goal { font-size: 0.85rem; }
+
+    /* Stat grid tighter */
+    .nn-stat-row {
+        grid-template-columns: 16px 60px 1fr 28px;
+        gap: 4px;
     }
 }
 
-/* Desktop: карточка по-прежнему position fixed с drag */
+/* Very small screens */
+@media (max-width: 400px) {
+    .nn-char-avatar { width: 38px; height: 38px; }
+    .nn-cal-current { font-size: 1.1rem; }
+    .nn-stat-label { font-size: 0.62rem; }
+    .nn-section { padding: 10px; }
+}
+
+/* ─── Desktop: wrapper passthrough ─────────────────────────── */
 @media (min-width: 769px) {
     #nn-card-wrapper {
         display: contents;
@@ -558,3 +931,139 @@
     }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   SETTINGS PANEL (in Extensions tab)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-settings-drawer .nn-set-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    flex-wrap: wrap;
+}
+#nn-settings-drawer .nn-set-debug {
+    gap: 6px;
+}
+#nn-settings-drawer .nn-set-debug .menu_button {
+    font-size: 0.72rem;
+    padding: 4px 10px;
+}
+#nn-settings-drawer hr {
+    border: none;
+    border-top: 1px solid var(--nn-border);
+    margin: 8px 0;
+}
+/* ═══════════════════════════════════════════════════════════════
+   ADDITIONAL STYLES — Tabs content, Settings, Info grid
+   ═══════════════════════════════════════════════════════════════ */
+
+.nn-tab-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* Info grid (key-value pairs) */
+.nn-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+}
+.nn-info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.nn-info-label {
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+}
+.nn-info-value {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--nn-text);
+}
+
+/* Help text */
+.nn-help-text {
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+    line-height: 1.5;
+    margin: 0;
+}
+
+/* Settings rows */
+.nn-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+}
+.nn-settings-row label {
+    font-size: 0.7rem;
+    color: var(--nn-text);
+    min-width: 120px;
+}
+.nn-settings-row input[type="number"],
+.nn-settings-row input[type="text"] {
+    background: var(--nn-bg);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    color: var(--nn-text);
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    outline: none;
+    transition: var(--nn-transition-fast);
+}
+.nn-settings-row input[type="number"]:focus,
+.nn-settings-row input[type="text"]:focus {
+    border-color: var(--nn-accent-dim);
+}
+.nn-settings-row input[type="checkbox"] {
+    accent-color: var(--nn-accent);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+/* Settings buttons */
+.nn-settings-btns {
+    gap: 6px;
+}
+.nn-set-btn {
+    font-size: 0.68rem;
+    padding: 5px 12px;
+    border-radius: var(--nn-radius-xs);
+    border: 1px solid var(--nn-border);
+    background: var(--nn-bg-card);
+    color: var(--nn-text);
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-set-btn:hover {
+    border-color: var(--nn-accent-dim);
+    background: var(--nn-bg-hover);
+    color: var(--nn-accent);
+}
+.nn-set-btn-danger {
+    border-color: var(--nn-red);
+    color: var(--nn-red);
+}
+.nn-set-btn-danger:hover {
+    background: rgba(184, 74, 74, 0.1);
+    border-color: var(--nn-red-bright);
+    color: var(--nn-red-bright);
+}
+
+/* ─── MOBILE: info grid single column ──────────────────────── */
+@media (max-width: 768px) {
+    .nn-info-grid {
+        grid-template-columns: 1fr;
+    }
+    .nn-settings-row label {
+        min-width: auto;
+    }
+}
