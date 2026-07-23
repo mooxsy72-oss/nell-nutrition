@@ -449,3 +449,55 @@
         font-size: 16px;
     }
 }
+/* ═══════════════════════════════════════════════════════════════
+   МОБИЛЬНЫЙ ФИКС: КАРТОЧКА ЦЕНТРИРУЕТСЯ ПРАВИЛЬНО
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+    /* Карточка на мобилке: фиксированная позиция от ЭКРАНА, не от родителя */
+    #nn-card {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: translate(-50%, -50%) !important;
+        width: 94vw !important;
+        max-width: 94vw !important;
+        max-height: 76dvh !important;
+        height: auto !important;
+        margin: 0 !important;
+        z-index: 100000 !important;
+        border-radius: 14px !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }
+
+    /* Убиваем анимацию открытия — она тоже может сбивать transform */
+    #nn-card:not(.nn-hidden) {
+        animation: none !important;
+    }
+
+    /* Кнопка и мини-бар — гарантируем кликабельность */
+    #nn-toggle,
+    #nn-minibar {
+        pointer-events: auto !important;
+        touch-action: manipulation !important;
+        position: relative !important;
+        z-index: 100 !important;
+    }
+
+    /* Крестик закрытия — крупнее для пальца */
+    #nn-card .nn-card-close {
+        width: 34px !important;
+        height: 34px !important;
+        font-size: 16px !important;
+        pointer-events: auto !important;
+        touch-action: manipulation !important;
+    }
+
+    /* Ручка перетаскивания — прячем на мобилке */
+    #nn-card .nn-card-drag-handle {
+        display: none !important;
+    }
+}
+
