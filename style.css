@@ -500,4 +500,61 @@
         display: none !important;
     }
 }
+/* ═══════════════════════════════════════════════════════════════
+   ОБЁРТКА КАРТОЧКИ — ГАРАНТИРОВАННОЕ ЦЕНТРИРОВАНИЕ
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100000;
+    pointer-events: none;
+}
+
+/* Карточка внутри обёртки — кликабельна */
+#nn-card-wrapper #nn-card {
+    pointer-events: auto;
+}
+
+/* Когда карточка скрыта — обёртка тоже не мешает */
+#nn-card-wrapper:has(.nn-hidden) {
+    display: none;
+}
+
+/* Fallback если :has() не поддерживается */
+#nn-card.nn-hidden {
+    display: none !important;
+}
+
+@media (max-width: 768px) {
+    #nn-card-wrapper #nn-card {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: none !important;
+        width: 94vw !important;
+        max-height: 76dvh !important;
+        border-radius: 14px !important;
+        overflow-y: auto !important;
+        animation: none !important;
+    }
+}
+
+/* Desktop: карточка по-прежнему position fixed с drag */
+@media (min-width: 769px) {
+    #nn-card-wrapper {
+        display: contents;
+    }
+    #nn-card-wrapper #nn-card {
+        position: fixed;
+    }
+}
 
