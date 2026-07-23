@@ -303,7 +303,15 @@ function buildCard() {
         </div>
     `;
 
-    document.body.appendChild(card);
+// Обёртка для правильного центрирования на мобилке
+let wrapper = document.getElementById('nn-card-wrapper');
+if (!wrapper) {
+    wrapper = document.createElement('div');
+    wrapper.id = 'nn-card-wrapper';
+    document.body.appendChild(wrapper);
+}
+wrapper.appendChild(card);
+
 
     document.getElementById('nn-card-close').addEventListener('click', () => setCard(false));
 
