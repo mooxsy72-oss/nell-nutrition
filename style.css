@@ -898,6 +898,19 @@
         animation: none !important;
     }
 
+    /* Compact на мобилке — фиксированный, чтобы можно было тащить */
+    #nn-card-wrapper #nn-card.nn-compact,
+    #nn-card-wrapper #nn-card.nn-compact.nn-compact-h {
+        position: fixed !important;
+        height: fit-content !important;
+        max-height: 85dvh !important;
+        width: 92vw !important;
+        top: 10dvh !important;
+        left: 4vw !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: none !important;
+    }
 
     /* Character cards stack vertically */
     .nn-chars-row {
@@ -2791,9 +2804,19 @@
 
 /* Мобилка */
 @media (max-width: 768px) {
+    #nn-help-overlay {
+        align-items: flex-start !important;justify-content: center !important;
+    }
     #nn-help-modal {
-        width: 96vw;
-        max-height: 88dvh;
+        position: fixed !important;
+        width: 92vw !important;
+        height: 82dvh !important;
+        max-height: 82dvh !important;
+        top: 5dvh !important;
+        left: 4vw !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: none !important;
     }
     .nn-help-header { padding: 12px 14px; }
     .nn-help-body { padding: 12px 14px; }
