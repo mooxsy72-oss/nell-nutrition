@@ -337,9 +337,24 @@
     max-height: calc(85vh - 56px) !important;
 }
 
-.nn-body::-webkit-scrollbar { width: 4px; }
-.nn-body::-webkit-scrollbar-track { background: transparent; }
-.nn-body::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
+/* Скроллбар тела карточки — Chrome/Edge */
+.nn-body::-webkit-scrollbar { width: 8px !important; }
+.nn-body::-webkit-scrollbar-track { background: transparent !important; }
+.nn-body::-webkit-scrollbar-thumb {
+    background: var(--nn-accent-dim) !important;
+    border-radius: 4px !important;
+    border: 2px solid transparent !important;
+    background-clip: padding-box !important;
+}
+.nn-body::-webkit-scrollbar-thumb:hover {
+    background: var(--nn-accent) !important;
+    background-clip: padding-box !important;
+}
+/* Скроллбар тела карточки — Firefox */
+.nn-body {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--nn-accent-dim) transparent !important;
+}
 
 /* ─── DRAG HANDLE ──────────────────────────────────────────── */
 .nn-drag-handle {
@@ -1857,7 +1872,7 @@
     --nn-border: rgba(230, 140, 180, 0.25);
     --nn-border-accent: rgba(230, 140, 180, 0.5);
 
-    --nn-text: #3d2733;
+    --nn-text: #5e4451;
     --nn-text-dim: #8f6a7e;
     --nn-text-muted: #bc9cab;
 
@@ -2915,4 +2930,79 @@
     #nn-card.nn-compact .nn-layout-only {
         display: none !important;
     }
+}
+/* ═══════════════════════════════════════════════════════════════
+   ЕДИНЫЙ СКРОЛЛБАР ДЛЯ ВСЕХ ПРОКРУЧИВАЕМЫХ ОБЛАСТЕЙ
+   (перебивает скроллбары темы таверны через !important)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card .nn-section-scroll,
+#nn-card .nn-prod-list,
+#nn-card .nn-history-list,
+#nn-card .nn-wh-table-wrap,
+#nn-help-modal .nn-help-body {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--nn-accent-dim) transparent !important;
+}
+#nn-card .nn-section-scroll::-webkit-scrollbar,
+#nn-card .nn-prod-list::-webkit-scrollbar,
+#nn-card .nn-history-list::-webkit-scrollbar,
+#nn-card .nn-wh-table-wrap::-webkit-scrollbar,
+#nn-help-modal .nn-help-body::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+}
+#nn-card .nn-section-scroll::-webkit-scrollbar-track,
+#nn-card .nn-prod-list::-webkit-scrollbar-track,
+#nn-card .nn-history-list::-webkit-scrollbar-track,
+#nn-card .nn-wh-table-wrap::-webkit-scrollbar-track,
+#nn-help-modal .nn-help-body::-webkit-scrollbar-track {
+    background: transparent !important;
+}
+#nn-card .nn-section-scroll::-webkit-scrollbar-thumb,
+#nn-card .nn-prod-list::-webkit-scrollbar-thumb,
+#nn-card .nn-history-list::-webkit-scrollbar-thumb,
+#nn-card .nn-wh-table-wrap::-webkit-scrollbar-thumb,
+#nn-help-modal .nn-help-body::-webkit-scrollbar-thumb {
+    background: var(--nn-accent-dim) !important;
+    border-radius: 4px !important;
+    border: 2px solid transparent !important;
+    background-clip: padding-box !important;
+}
+#nn-card .nn-section-scroll::-webkit-scrollbar-thumb:hover,
+#nn-card .nn-prod-list::-webkit-scrollbar-thumb:hover,
+#nn-card .nn-history-list::-webkit-scrollbar-thumb:hover,
+#nn-card .nn-wh-table-wrap::-webkit-scrollbar-thumb:hover,
+#nn-help-modal .nn-help-body::-webkit-scrollbar-thumb:hover {
+    background: var(--nn-accent) !important;
+    background-clip: padding-box !important;
+}
+
+/* Выпадающий список выбора фона */
+.nn-bg-select {
+    flex: 1;
+    min-width: 140px;
+    background: var(--nn-bg) !important;
+    border: 1px solid var(--nn-border) !important;
+    border-radius: var(--nn-radius-xs) !important;
+    color: var(--nn-text) !important;
+    padding: 5px 8px !important;
+    font-size: 0.7rem !important;
+    outline: none !important;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-bg-select:focus {
+    border-color: var(--nn-accent-dim) !important;
+}
+.nn-bg-select option {
+    background: var(--nn-bg-card);
+    color: var(--nn-text);
+}
+/* ─── Мини-бар: только отображение, без клика ─── */
+#nn-minibar {
+    cursor: default !important;
+}
+#nn-minibar:hover {
+    border-color: var(--nn-border) !important;
+    box-shadow: none !important;
 }
