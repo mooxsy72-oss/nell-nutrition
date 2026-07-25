@@ -197,9 +197,9 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(920px, 94vw);
-    height: min(680px, 85vh);
-    max-height: 85vh;
+    width: min(860px, 92vw);
+    height: min(600px, 82vh);
+    max-height: 82vh;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -320,7 +320,8 @@
 
 /* ─── CARD BODY (scrollable) ──────────────────────────────── */
 .nn-body {
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 16px 18px;
@@ -328,6 +329,7 @@
     flex-direction: column;
     gap: 14px;
 }
+
 .nn-body::-webkit-scrollbar { width: 4px; }
 .nn-body::-webkit-scrollbar-track { background: transparent; }
 .nn-body::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
@@ -2821,4 +2823,83 @@
     .nn-help-header { padding: 12px 14px; }
     .nn-help-body { padding: 12px 14px; }
     .nn-help-row { grid-template-columns: 20px 60px 1fr; }
+}
+/* ═══════════════════════════════════════════════════════════════
+   COMPACT MOBILE FIXES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Обрезка фоновой картинки в compact vertical */
+#nn-card.nn-compact {
+    overflow: hidden !important;
+}
+.nn-compact-wrap {
+    overflow: hidden;
+    border-radius: inherit;
+}
+
+/* touch-action для перетаскивания шапки на мобилке */
+@media (max-width: 768px) {
+    #nn-card.nn-compact .nn-header {
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: grab;
+    }
+    #nn-card.nn-compact .nn-header:active {
+        cursor: grabbing;
+    }
+
+    /* Увеличиваем размер текста в compact на мобилке */
+    #nn-card.nn-compact .nn-cmp-name {
+        font-size: 0.88rem;
+    }
+    #nn-card.nn-compact .nn-cmp-subtitle {
+        font-size: 0.68rem;
+    }
+    #nn-card.nn-compact .nn-cmp-cal-cur {
+        font-size: 1.35rem;
+    }
+    #nn-card.nn-compact .nn-cmp-cal-goal {
+        font-size: 0.88rem;
+    }
+    #nn-card.nn-compact .nn-cmp-stat-label {
+        font-size: 0.7rem;
+    }
+    #nn-card.nn-compact .nn-cmp-stat-val {
+        font-size: 0.68rem;
+    }
+    #nn-card.nn-compact .nn-cmp-stat-row {
+        grid-template-columns: 18px 62px 1fr 30px;
+        gap: 4px 6px;
+    }
+    #nn-card.nn-compact .nn-cmp-stat-bar {
+        height: 5px;
+    }
+    #nn-card.nn-compact .nn-cmp-avatar {
+        width: 52px;
+        height: 52px;
+    }
+    #nn-card.nn-compact .nn-cmp-pill {
+        font-size: 0.65rem;
+        padding: 3px 8px;
+    }
+    #nn-card.nn-compact .nn-cmp-day {
+        font-size: 0.72rem;
+    }
+    #nn-card.nn-compact .nn-cmp-expand {
+        font-size: 0.7rem;
+        padding: 4px 10px;
+    }
+    #nn-card.nn-compact .nn-cmp-calbar {
+        height: 6px;
+    }
+    #nn-card.nn-compact .nn-cmp-circle {
+        width: 44px !important;
+        height: 44px !important;
+        font-size: 0.9rem !important;
+    }
+    #nn-card.nn-compact .nn-cmp-card {
+        padding: 12px 14px;
+        gap: 10px;
+    }
 }
