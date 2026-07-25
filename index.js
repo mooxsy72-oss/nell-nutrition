@@ -44,6 +44,10 @@ const THEME_LS_KEY = 'nellNutrition_theme'; // 'violet' | 'rose' | 'adaptive'
 const BG_LS_KEY = 'nellNutrition_bgImage';  // имя файла картинки в папке icons
 const BG_OVERLAY_LS_KEY = 'nellNutrition_bgOverlay'; // 0–100 затемнение фона
 
+// Список доступных фонов в папке icons — впиши сюда имена своих файлов
+const BG_PRESETS = ['фон1.jpg', 'фон2.jpg', 'фон3.jpg', 'фон4.jpg', 'фон5.jpg'];
+
+
 // SVG-яблоко (красится через currentColor — само подстраивается под тему)
 const NN_APPLE_SVG = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none"
     stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -569,18 +573,7 @@ function buildMiniBar() {
     } else {
         document.body.appendChild(bar);
     }
-
-    bar.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleCard();
-    });
-    bar.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        toggleCard();
-    });
 }
-
 
 function renderMiniBar() {
     if (!state) return;
@@ -2259,8 +2252,17 @@ function renderSettingsTab(body) {
                         </div>
                     </div>
                     <div class="nn-settings-row">
-                        <label for="nn-set-bg">Свой фон (файл в папке icons)</label>
-                        <input type="text" id="nn-set-bg" placeholder="bg.jpg (по умолчанию)" value="${localStorage.getItem(BG_LS_KEY) || ''}">
+                        <label for="nn-set-bg">Фон карточки</label>
+                        <select id="nn-set-bg" class="nn-bg-select">
+                            ${(() => {
+                                const cur = localStorage.getItem(BG_LS_KEY) || 'bg.jpg';
+                                let opts = BG_PRESETS.map(f =>
+                                    `<option value="${f}" ${cur === f ? 'selected' : ''}>${f}</option>`
+                                ).join('');
+                                opts += `<option value="none" ${cur === 'none' ? 'selected' : ''}>Без фона</option>`;
+                                return opts;
+                            })()}
+                        </select>
                     </div>
                     <div class="nn-settings-row">
                         <label for="nn-set-overlay">Затемнение фона</label>
@@ -2369,13 +2371,10 @@ function renderSettingsTab(body) {
     });
 
     document.getElementById('nn-set-bg')?.addEventListener('change', (e) => {
-        const val = e.target.value.trim();
-        if (val) localStorage.setItem(BG_LS_KEY, val);
-        else localStorage.removeItem(BG_LS_KEY);
+        const val = e.target.value;
+        localStorage.setItem(BG_LS_KEY, val);
         applyCardBackground();
-        const msg = !val ? 'Фон по умолчанию (bg.jpg)'
-                  : val.toLowerCase() === 'none' ? 'Фон убран'
-                  : 'Фон обновлён';
+        const msg = val === 'none' ? 'Фон убран' : `Фон: ${val}`;
         notify(msg, 'info', 3000);
     });
 
