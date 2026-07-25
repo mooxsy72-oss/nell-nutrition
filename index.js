@@ -1055,27 +1055,32 @@ function setCard(open) {
     const wrapper = document.getElementById('nn-card-wrapper');
     if (!card) return;
 
-    if (open) {
-        if (wrapper) wrapper.style.display = '';
-        card.style.visibility = 'hidden';
-        card.classList.remove('nn-hidden');
-        card.classList.toggle('nn-compact', isCompact());
-        card.classList.toggle('nn-pinned', isPinned());restoreCardPos(card);
-        requestAnimationFrame(() => {
-            card.style.visibility = '';
-            renderCard();
-        });
-        // Вешаем слушатель только если карточка НЕ закреплена
-        if (!isPinned()) {
-            setTimeout(() => {
-                document.addEventListener('pointerdown', onOutsideClick, true);
-            }, 0);
-        }
-    } else {
-        card.classList.add('nn-hidden');
-        if (wrapper) wrapper.style.display = 'none';
-        document.removeEventListener('pointerdown', onOutsideClick, true);
+if (open) {
+    if (wrapper) wrapper.style.display = '';
+    card.style.visibility = 'hidden';
+    card.classList.remove('nn-hidden');
+    card.classList.toggle('nn-compact', isCompact());
+    // На мобилке compact всегда горизонтальный — ставим класс принудительно
+    if (isCompact() && window.innerWidth <= 768) {
+        card.classList.add('nn-compact-h');
+    } else if (window.innerWidth <= 768) {
+        card.classList.remove('nn-compact-h');
     }
+    card.classList.toggle('nn-pinned', isPinned());
+    restoreCardPos(card);
+    requestAnimationFrame(() => {
+        card.style.visibility = '';renderCard();
+    });
+    if (!isPinned()) {
+        setTimeout(() => {
+            document.addEventListener('pointerdown', onOutsideClick, true);
+        }, 0);
+    }
+} else {
+    card.classList.add('nn-hidden');
+    if (wrapper) wrapper.style.display = 'none';
+    document.removeEventListener('pointerdown', onOutsideClick, true);
+}
 }
 
 
