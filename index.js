@@ -2549,7 +2549,14 @@ function makeDraggable(el, handle) {
 
     // Точка рядом с краем карточки?
     function inEdge(e) {
-        if (window.innerWidth <= 768) return false;
+        if (window.innerWidth <= 768) {
+            // На мобилке тащим только за шапку и только в compact-режиме
+            const card = document.getElementById('nn-card');
+            if (card && card.classList.contains('nn-compact')) {
+                return !!e.target.closest('.nn-header');
+            }
+            return false;
+        }
         const r = el.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
@@ -2622,8 +2629,8 @@ function saveCardPos(el) {
 }
 
 function restoreCardPos(el) {
-    // Мобилка — всегда по центру через CSS, позицию не трогаем
-    if (window.innerWidth <= 768) {
+    // Мобилка + НЕ compact — CSS центрирует через flex, позицию не трогаем
+    if (window.innerWidth <= 768 && !el.classList.contains('nn-compact')) {
         el.style.left = '';
         el.style.top = '';
         el.style.right = '';
@@ -2631,9 +2638,12 @@ function restoreCardPos(el) {
         el.style.transform = '';
         return;
     }
+    // Мобилка + compact — CSS уже поставил позицию (10dvh / 4vw),
+    // восстанавливаем только если пользователь уже двигал карточку
     const saved = localStorage.getItem(POS_LS_KEY);
     if (!saved) {
-        // Первое открытие — центрируем
+        if (window.innerWidth <= 768) return; // CSS сам расставит
+        // Десктоп, первый раз — по центру
         el.style.left = '50%';
         el.style.top = '50%';
         el.style.right = 'auto';
@@ -2652,7 +2662,6 @@ function restoreCardPos(el) {
         el.style.transform = 'none';
     } catch {}
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // SETTINGS PANEL (Extensions sidebar — minimal)
