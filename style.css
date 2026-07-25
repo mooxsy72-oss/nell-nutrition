@@ -1,0 +1,2801 @@
+/* ═══════════════════════════════════════════════════════════════
+   NUTRITION FRAMEWORK — UI v2 (Reference-based dark gold theme)
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+    /* ─── Core palette ─── */
+    --nn-bg: #0d0f14;
+    --nn-bg-card: #141820;
+    --nn-bg-section: #1a1f2a;
+    --nn-bg-hover: #1e2430;
+    --nn-border: #2a3040;
+    --nn-border-accent: #3d4a2a;
+
+    /* ─── Text ─── */
+    --nn-text: #e8e4dc;
+    --nn-text-dim: #7a8090;
+    --nn-text-muted: #505868;
+
+    /* ─── Accent (gold/amber) ─── */
+    --nn-accent: #c8a84b;
+    --nn-accent-dim: #8a7a3a;
+    --nn-accent-glow: rgba(200, 168, 75, 0.2);
+    --nn-accent-glow-strong: rgba(200, 168, 75, 0.4);
+
+    /* ─── Status colors ─── */
+    --nn-green: #5a9a4a;
+    --nn-green-bright: #7bc96a;
+    --nn-blue: #4a8ab8;
+    --nn-blue-bright: #5ca8d8;
+    --nn-orange: #c8884a;
+    --nn-orange-bright: #e8a85a;
+    --nn-red: #b84a4a;
+    --nn-red-bright: #d85a5a;
+    --nn-purple: #8a5ab8;
+
+    /* ─── Bar gradients ─── */
+    --nn-bar-good: linear-gradient(90deg, #4a7a3a, #6aaa5a);
+    --nn-bar-warn: linear-gradient(90deg, #b8884a, #d8a85a);
+    --nn-bar-danger: linear-gradient(90deg, #a83a3a, #c85a5a);
+    --nn-bar-overfill: linear-gradient(90deg, #7a3ab8, #9a5ad8);
+    --nn-bar-hydration: linear-gradient(90deg, #3a6a9a, #5a9ad8);
+    --nn-bar-energy: linear-gradient(90deg, #9a7a2a, #c8a84b);
+    --nn-bar-health: linear-gradient(90deg, #3a8a5a, #5ab87a);
+
+    /* ─── Geometry ─── */
+    --nn-radius: 16px;
+    --nn-radius-md: 12px;
+    --nn-radius-sm: 8px;
+    --nn-radius-xs: 5px;
+
+    /* ─── Shadows ─── */
+    --nn-shadow: 0 12px 48px rgba(0, 0, 0, 0.6), 0 0 1px rgba(200, 168, 75, 0.1);
+    --nn-shadow-section: 0 2px 12px rgba(0, 0, 0, 0.3);
+    --nn-shadow-glow: 0 0 20px rgba(200, 168, 75, 0.15);
+
+    /* ─── Transitions ─── */
+    --nn-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --nn-transition-fast: 0.15s ease;
+}
+
+/* ─── UTILITY ──────────────────────────────────────────────── */
+.nn-hidden { display: none !important; }
+
+/* ─── TOGGLE BUTTON (🍎 near send) ────────────────────────── */
+#nn-toggle {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1.5px solid var(--nn-accent-dim);
+    background: var(--nn-bg-card);
+    color: var(--nn-accent);
+    font-size: 17px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--nn-transition);
+    box-shadow: 0 0 8px var(--nn-accent-glow);
+    position: relative;
+    z-index: 50;
+    flex-shrink: 0;
+    pointer-events: auto !important;
+    touch-action: manipulation !important;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+#nn-toggle:hover {
+    border-color: var(--nn-accent);
+    box-shadow: 0 0 16px var(--nn-accent-glow-strong);
+    transform: scale(1.08);
+}
+#nn-toggle:active { transform: scale(0.92); }
+.nn-toggle-icon { line-height: 1; pointer-events: none; }
+
+/* ─── MINI BAR (юзер + бот, с именами и сытостью) ─────────── */
+#nn-minibar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 6px 14px;
+    background: var(--nn-bg-card);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-sm);
+    margin: 0 8px 5px 8px;
+    cursor: pointer;
+    transition: var(--nn-transition);
+    z-index: 40;
+    flex-wrap: wrap;
+    pointer-events: auto !important;
+    touch-action: manipulation !important;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+#nn-minibar:hover {
+    border-color: var(--nn-accent-dim);
+    box-shadow: 0 0 10px var(--nn-accent-glow);
+}
+.nn-mini-char {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.nn-mini-name {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--nn-accent);
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.nn-mini-stat {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.7rem;
+    color: var(--nn-text-dim);
+    white-space: nowrap;
+}
+.nn-mini-ico { font-size: 0.78rem; }
+.nn-mini-stat b {
+    font-weight: 600;
+    color: var(--nn-text);
+}
+.nn-mini-good b { color: var(--nn-green-bright); }
+.nn-mini-warn b { color: var(--nn-orange-bright); }
+.nn-mini-danger b { color: var(--nn-red-bright); }
+.nn-mini-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--nn-border);
+    flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+    #nn-minibar { gap: 8px; padding: 5px 10px; margin: 0 4px 4px 4px; }
+    .nn-mini-char { gap: 6px; }
+    .nn-mini-stat { font-size: 0.64rem; }
+    .nn-mini-name { font-size: 0.62rem; max-width: 70px; }
+    .nn-mini-ico { font-size: 0.7rem; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN CARD
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100000;
+    pointer-events: none;
+}
+#nn-card-wrapper #nn-card {
+    pointer-events: auto;
+}
+
+#nn-card.nn-hidden {
+    display: none !important;
+}
+
+#nn-card {
+    position: fixed;
+    z-index: 100000;
+    color: var(--nn-text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+    pointer-events: auto;
+
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(920px, 94vw);
+    height: min(680px, 85vh);
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    background: var(--nn-bg);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius);
+    box-shadow: var(--nn-shadow);
+
+    animation: nn-fade-in 0.2s ease-out;
+}
+
+@keyframes nn-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes nn-appear {
+    from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ─── CARD HEADER ──────────────────────────────────────────── */
+.nn-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--nn-border);
+    background: linear-gradient(180deg, rgba(200,168,75,0.03) 0%, transparent 100%);
+    flex-shrink: 0;
+}
+.nn-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.nn-header-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--nn-text);
+    letter-spacing: 0.02em;
+}
+.nn-header-sparkle {
+    color: var(--nn-accent);
+    font-size: 0.85rem;
+}
+.nn-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.nn-header-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--nn-border);
+    background: transparent;
+    color: var(--nn-text-dim);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-header-btn:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+    background: rgba(200,168,75,0.05);
+}
+
+/* ─── TABS ─────────────────────────────────────────────────── */
+.nn-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--nn-border);
+    background: var(--nn-bg-card);
+    flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.nn-tabs::-webkit-scrollbar { display: none; }
+
+.nn-tab {
+    padding: 10px 16px;
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: var(--nn-text-dim);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+    white-space: nowrap;
+    position: relative;
+}
+.nn-tab:hover {
+    color: var(--nn-text);
+}
+.nn-tab.nn-tab-active {
+    color: var(--nn-accent);
+    border-bottom-color: var(--nn-accent);
+}
+.nn-tab.nn-tab-active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 20%;
+    right: 20%;
+    height: 2px;
+    background: var(--nn-accent);
+    border-radius: 1px;
+    box-shadow: 0 0 8px var(--nn-accent-glow);
+}
+
+/* ─── CARD BODY (scrollable) ──────────────────────────────── */
+.nn-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.nn-body::-webkit-scrollbar { width: 4px; }
+.nn-body::-webkit-scrollbar-track { background: transparent; }
+.nn-body::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
+
+/* ─── DRAG HANDLE ──────────────────────────────────────────── */
+.nn-drag-handle {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nn-text-muted);
+    font-size: 1rem;
+    cursor: grab;
+    border-radius: 6px;
+    user-select: none;
+    touch-action: none;
+    transition: var(--nn-transition-fast);
+}
+.nn-drag-handle:hover { color: var(--nn-accent-dim); background: rgba(200,168,75,0.05); }
+.nn-drag-handle:active { cursor: grabbing; }
+
+/* ═══════════════════════════════════════════════════════════════
+   CHARACTER CARDS (User & Bot side by side)
+   ═══════════════════════════════════════════════════════════════ */
+.nn-chars-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.nn-char-card {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-md);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    transition: var(--nn-transition);
+}
+.nn-char-card:hover {
+    border-color: var(--nn-border-accent);
+    box-shadow: var(--nn-shadow-section);
+}
+
+/* Character header inside card */
+.nn-char-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.nn-char-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1.5px solid var(--nn-border);
+    flex-shrink: 0;
+    background: var(--nn-bg);
+}
+.nn-char-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.nn-char-avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    color: var(--nn-text-muted);
+    background: var(--nn-bg-card);
+}
+.nn-char-info {
+    flex: 1;
+    min-width: 0;
+}
+.nn-char-name {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--nn-text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-char-name-icon {
+    font-size: 0.7rem;
+    color: var(--nn-accent);
+}
+.nn-char-subtitle {
+    font-size: 0.64rem;
+    color: var(--nn-text-dim);
+    margin-top: 2px;
+}
+.nn-char-menu-btn {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--nn-text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--nn-transition-fast);
+}
+.nn-char-menu-btn:hover { color: var(--nn-text-dim); background: var(--nn-bg-hover); }
+
+/* ─── CALORIES BIG NUMBER ──────────────────────────────────── */
+.nn-cal-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nn-cal-numbers {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+.nn-cal-current {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--nn-text);
+    line-height: 1;
+}
+.nn-cal-sep {
+    font-size: 1rem;
+    color: var(--nn-text-muted);
+    margin: 0 2px;
+}
+.nn-cal-goal {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--nn-text-dim);
+}
+.nn-cal-unit {
+    font-size: 0.72rem;
+    color: var(--nn-text-muted);
+    margin-left: 6px;
+}
+.nn-cal-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.nn-cal-bar {
+    flex: 1;
+    height: 7px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.nn-cal-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--nn-bar-good);
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+}
+.nn-cal-bar-fill.nn-overfill { background: var(--nn-bar-overfill); }
+.nn-cal-bar-fill.nn-warn { background: var(--nn-bar-warn); }
+.nn-cal-bar-fill.nn-danger { background: var(--nn-bar-danger); }
+.nn-cal-pct {
+    font-size: 0.64rem;
+    color: var(--nn-text-dim);
+    min-width: 28px;
+    text-align: right;
+}
+
+/* ─── STAT BARS (satiety, hydration, energy, health) ───────── */
+.nn-stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nn-stat-row {
+    display: grid;
+    grid-template-columns: 18px 70px 1fr 32px;
+    align-items: center;
+    gap: 6px;
+}
+.nn-stat-icon {
+    font-size: 0.72rem;
+    text-align: center;
+}
+.nn-stat-label {
+    font-size: 0.68rem;
+    color: var(--nn-text-dim);
+}
+.nn-stat-bar {
+    height: 5px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.nn-stat-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+.nn-stat-bar-fill.nn-fill-satiety  { background: var(--nn-bar-good); }
+.nn-stat-bar-fill.nn-fill-water    { background: var(--nn-bar-hydration); }
+.nn-stat-bar-fill.nn-fill-energy   { background: var(--nn-bar-energy); }
+.nn-stat-bar-fill.nn-fill-health   { background: var(--nn-bar-health); }
+
+.nn-stat-val {
+    font-size: 0.64rem;
+    color: var(--nn-text);
+    text-align: right;
+    font-weight: 600;
+}
+
+/* ─── WEIGHT ROW ───────────────────────────────────────────── */
+.nn-weight-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+    font-size: 0.68rem;
+    color: var(--nn-text-dim);
+}
+.nn-weight-line b { color: var(--nn-text); font-weight: 600; }
+.nn-pregnancy-badge {
+    font-size: 0.6rem;
+    font-family: inherit;
+    background: rgba(200,168,75,0.1);
+    border: 1px solid var(--nn-accent-dim);
+    border-radius: 10px;
+    padding: 2px 8px;
+    color: var(--nn-accent);
+    margin-left: auto;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-pregnancy-badge:hover {
+    background: rgba(200,168,75,0.2);
+    box-shadow: 0 0 8px var(--nn-accent-glow);
+}
+
+.nn-preg-detail {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: rgba(200,168,75,0.06);
+    border: 1px solid var(--nn-accent-dim);
+    border-radius: var(--nn-radius-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    animation: nn-fade-in 0.2s ease-out;
+}
+.nn-preg-detail-title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--nn-accent);
+    margin-bottom: 2px;
+}
+.nn-preg-detail-line {
+    font-size: 0.64rem;
+    color: var(--nn-text-dim);
+    line-height: 1.4;
+}
+
+
+/* ─── STATUS CIRCLE (Healthy / Stable) ─────────────────────── */
+.nn-status-circle-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+}
+.nn-status-circle {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 2.5px solid var(--nn-green);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    color: var(--nn-green);
+    position: relative;
+    box-shadow: 0 0 12px rgba(90, 154, 74, 0.2);
+    transition: var(--nn-transition);
+}
+.nn-status-circle.nn-status-warn {
+    border-color: var(--nn-orange);
+    color: var(--nn-orange);
+    box-shadow: 0 0 12px rgba(200, 136, 74, 0.2);
+}
+.nn-status-circle.nn-status-danger {
+    border-color: var(--nn-red);
+    color: var(--nn-red);
+    box-shadow: 0 0 12px rgba(184, 74, 74, 0.3);
+    animation: nn-pulse-status 2s infinite;
+}
+@keyframes nn-pulse-status {
+    0%, 100% { box-shadow: 0 0 12px rgba(184, 74, 74, 0.2); }
+    50%      { box-shadow: 0 0 20px rgba(184, 74, 74, 0.5); }
+}
+.nn-status-label {
+    font-size: 0.58rem;
+    color: var(--nn-text-dim);
+    text-align: center;
+}
+.nn-status-text {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--nn-text);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BOTTOM SECTIONS — Conditions, Buffs, Debuffs
+   ═══════════════════════════════════════════════════════════════ */
+.nn-sections-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+}
+
+.nn-section {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-md);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 120px;
+}
+.nn-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.nn-section-icon {
+    font-size: 0.78rem;
+}
+.nn-section-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--nn-text);
+}
+.nn-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+}
+.nn-section-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+.nn-section-footer-btn {
+    font-size: 0.62rem;
+    color: var(--nn-text-dim);
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: var(--nn-transition-fast);
+}
+.nn-section-footer-btn:hover { color: var(--nn-accent); }
+
+/* ─── CONDITION ITEMS ──────────────────────────────────────── */
+.nn-condition-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    border-radius: var(--nn-radius-xs);
+    border-left: 3px solid var(--nn-orange);
+    background: rgba(200, 136, 74, 0.05);
+}
+.nn-condition-item.nn-sev-severe {
+    border-left-color: var(--nn-red);
+    background: rgba(184, 74, 74, 0.05);
+}
+.nn-condition-item.nn-sev-critical {
+    border-left-color: #ff3333;
+    background: rgba(255, 51, 51, 0.08);
+    animation: nn-pulse-danger 1.8s infinite;
+}
+@keyframes nn-pulse-danger {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 51, 51, 0); }
+    50%      { box-shadow: 0 0 8px 2px rgba(255, 51, 51, 0.15); }
+}
+.nn-condition-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.nn-condition-name {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--nn-orange-bright);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nn-condition-item.nn-sev-severe .nn-condition-name { color: var(--nn-red-bright); }
+.nn-condition-time {
+    font-size: 0.58rem;
+    color: var(--nn-text-muted);
+}
+.nn-condition-effects {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.nn-condition-effect {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.62rem;
+}
+.nn-condition-effect-name { color: var(--nn-text-dim); }
+.nn-condition-effect-val { color: var(--nn-red); font-weight: 600; }
+
+/* ─── BUFF ITEMS ───────────────────────────────────────────── */
+.nn-buff-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+    gap: 6px;
+}
+.nn-buff-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-buff-icon {
+    font-size: 0.72rem;
+}
+.nn-buff-name {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--nn-green-bright);
+}
+.nn-buff-val {
+    font-size: 0.64rem;
+    color: var(--nn-green);
+    font-weight: 600;
+}
+
+/* ─── DEBUFF ITEMS ─────────────────────────────────────────── */
+.nn-debuff-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+    gap: 6px;
+}
+.nn-debuff-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-debuff-icon {
+    font-size: 0.72rem;
+}
+.nn-debuff-name {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--nn-red-bright);
+}
+.nn-debuff-val {
+    font-size: 0.64rem;
+    color: var(--nn-red);
+    font-weight: 600;
+}
+
+/* ─── EMPTY STATE ──────────────────────────────────────────── */
+.nn-empty {
+    font-size: 0.64rem;
+    color: var(--nn-text-muted);
+    font-style: italic;
+    text-align: center;
+    padding: 8px 0;
+}
+
+/* ─── FOOTER ───────────────────────────────────────────────── */
+.nn-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 18px;
+    border-top: 1px solid var(--nn-border);
+    background: var(--nn-bg-card);
+    flex-shrink: 0;
+    gap: 12px;
+}
+.nn-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.6rem;
+    color: var(--nn-text-muted);
+}
+.nn-footer-tip {
+    font-size: 0.6rem;
+    color: var(--nn-text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nn-footer-btn {
+    font-size: 0.6rem;
+    color: var(--nn-text-dim);
+    background: none;
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nn-footer-btn:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+}
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+    /* Card wrapper */
+    #nn-card-wrapper {
+        align-items: flex-start;
+        padding-top: 2vh;
+    }
+    #nn-card-wrapper #nn-card {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: none !important;
+        width: 96vw !important;
+        max-width: 96vw !important;
+        max-height: 88dvh !important;
+        height: 88dvh !important;
+        margin: 0 !important;
+        border-radius: 14px !important;
+        animation: none !important;
+    }
+
+
+    /* Character cards stack vertically */
+    .nn-chars-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    /* Sections stack */
+    .nn-sections-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    /* Status circle repositions */
+    .nn-status-circle-wrap {
+        position: static;
+        flex-direction: row;
+        gap: 8px;
+        padding-top: 6px;
+    }
+    .nn-status-circle {
+        width: 40px;
+        height: 40px;
+        font-size: 0.9rem;
+    }
+
+    /* Tabs scroll */
+    .nn-tabs {
+        padding: 0 10px;
+    }
+    .nn-tab {
+        padding: 8px 12px;
+        font-size: 0.68rem;
+    }
+
+    /* Header */
+    .nn-header {
+        padding: 10px 12px;
+    }
+
+    /* Body */
+    .nn-body {
+        padding: 12px;
+    }
+
+    /* Footer */
+    .nn-footer {
+        padding: 6px 12px;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .nn-footer-tip { display: none; }
+
+    /* Drag handle hidden */
+    .nn-drag-handle { display: none !important; }
+
+    /* Toggle & minibar */
+    #nn-toggle {
+        width: 34px;
+        height: 34px;
+        font-size: 15px;
+    }
+    #nn-minibar {
+        margin: 0 4px 4px 4px;
+        padding: 4px 10px;
+        gap: 8px;
+    }
+
+    /* Close button bigger */
+    .nn-header-btn {
+        width: 34px;
+        height: 34px;
+        font-size: 15px;
+    }
+
+    /* Cal numbers smaller */
+    .nn-cal-current { font-size: 1.3rem; }
+    .nn-cal-goal { font-size: 0.85rem; }
+
+    /* Stat grid tighter */
+    .nn-stat-row {
+        grid-template-columns: 16px 60px 1fr 28px;
+        gap: 4px;
+    }
+}
+
+/* Very small screens */
+@media (max-width: 400px) {
+    .nn-char-avatar { width: 38px; height: 38px; }
+    .nn-cal-current { font-size: 1.1rem; }
+    .nn-stat-label { font-size: 0.62rem; }
+    .nn-section { padding: 10px; }
+}
+
+/* ─── Desktop: wrapper passthrough ─────────────────────────── */
+@media (min-width: 769px) {
+    #nn-card-wrapper {
+        display: contents;
+    }
+    #nn-card-wrapper #nn-card {
+        position: fixed;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SETTINGS PANEL (in Extensions tab)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-settings-drawer .nn-set-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    flex-wrap: wrap;
+}
+#nn-settings-drawer .nn-set-debug {
+    gap: 6px;
+}
+#nn-settings-drawer .nn-set-debug .menu_button {
+    font-size: 0.72rem;
+    padding: 4px 10px;
+}
+#nn-settings-drawer hr {
+    border: none;
+    border-top: 1px solid var(--nn-border);
+    margin: 8px 0;
+}
+/* ═══════════════════════════════════════════════════════════════
+   ADDITIONAL STYLES — Tabs content, Settings, Info grid
+   ═══════════════════════════════════════════════════════════════ */
+
+.nn-tab-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* Info grid (key-value pairs) */
+.nn-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+}
+.nn-info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.nn-info-label {
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+}
+.nn-info-value {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--nn-text);
+}
+
+/* Help text */
+.nn-help-text {
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+    line-height: 1.5;
+    margin: 0;
+}
+
+/* Settings rows */
+.nn-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+}
+.nn-settings-row label {
+    font-size: 0.7rem;
+    color: var(--nn-text);
+    min-width: 120px;
+}
+.nn-settings-row input[type="number"],
+.nn-settings-row input[type="text"] {
+    background: var(--nn-bg);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    color: var(--nn-text);
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    outline: none;
+    transition: var(--nn-transition-fast);
+}
+.nn-settings-row input[type="number"]:focus,
+.nn-settings-row input[type="text"]:focus {
+    border-color: var(--nn-accent-dim);
+}
+.nn-settings-row input[type="checkbox"] {
+    accent-color: var(--nn-accent);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+/* Settings buttons */
+.nn-settings-btns {
+    gap: 6px;
+}
+.nn-set-btn {
+    font-size: 0.68rem;
+    padding: 5px 12px;
+    border-radius: var(--nn-radius-xs);
+    border: 1px solid var(--nn-border);
+    background: var(--nn-bg-card);
+    color: var(--nn-text);
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-set-btn:hover {
+    border-color: var(--nn-accent-dim);
+    background: var(--nn-bg-hover);
+    color: var(--nn-accent);
+}
+.nn-set-btn-danger {
+    border-color: var(--nn-red);
+    color: var(--nn-red);
+}
+.nn-set-btn-danger:hover {
+    background: rgba(184, 74, 74, 0.1);
+    border-color: var(--nn-red-bright);
+    color: var(--nn-red-bright);
+}
+
+/* ─── MOBILE: info grid single column ──────────────────────── */
+@media (max-width: 768px) {
+    .nn-info-grid {
+        grid-template-columns: 1fr;
+    }
+    .nn-settings-row label {
+        min-width: auto;
+    }
+}
+/* ═══════════════════════════════════════════════════════════════
+   HOTFIX — Status circle, avatars, layout
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Status circle — больше не absolute, стоит в потоке справа */
+.nn-status-circle-wrap {
+    position: static !important;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding-left: 10px;
+}
+
+/* Контейнер для баров + статус рядом */
+.nn-char-bottom {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+}
+.nn-char-bottom .nn-stats-grid {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Аватарки крупнее */
+.nn-char-avatar {
+    width: 64px !important;
+    height: 64px !important;
+    border-radius: 12px !important;
+}
+
+/* Status circle чуть меньше чтобы не доминировал */
+.nn-status-circle {
+    width: 50px;
+    height: 50px;
+    font-size: 1rem;
+}
+
+/* Stat values не перекрываются */
+.nn-stat-val {
+    position: relative;
+    z-index: 2;
+}
+
+/* Убираем перекрытие — stat row без overflow */
+.nn-stat-row {
+    overflow: visible;
+}
+
+/* ─── MOBILE fix ─── */
+@media (max-width: 768px) {
+    .nn-char-avatar {
+        width: 52px !important;
+        height: 52px !important;
+    }
+    .nn-status-circle {
+        width: 42px;
+        height: 42px;
+        font-size: 0.85rem;
+    }
+    .nn-char-bottom {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .nn-status-circle-wrap {
+        flex-direction: row;
+        justify-content: center;
+        margin-left: 0;
+        padding-left: 0;
+        padding-top: 6px;
+    }
+}
+/* ═══════════════════════════════════════════════════════════════
+   NOTIFICATIONS (toasts)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-notify-container {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 200000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+    max-width: 340px;
+}
+.nn-notify {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 0.74rem;
+    color: var(--nn-text);
+    background: var(--nn-bg-card);
+    border: 1px solid var(--nn-border);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 10px rgba(200,168,75,0.1);
+    pointer-events: auto;
+    cursor: pointer;
+    opacity: 0;
+    transform: translateX(30px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.nn-notify-show {
+    opacity: 1;
+    transform: translateX(0);
+}
+.nn-notify-hide {
+    opacity: 0;
+    transform: translateX(30px) scale(0.95);
+}
+.nn-notify-ico { font-size: 1rem; flex-shrink: 0; }
+.nn-notify-text { line-height: 1.3; }
+
+/* Типы */
+.nn-notify-success { border-left: 3px solid var(--nn-green); }
+.nn-notify-success .nn-notify-ico { color: var(--nn-green-bright); }
+
+.nn-notify-warning { border-left: 3px solid var(--nn-orange); }
+.nn-notify-warning .nn-notify-ico { color: var(--nn-orange-bright); }
+
+.nn-notify-error { border-left: 3px solid var(--nn-red); }
+.nn-notify-error .nn-notify-ico { color: var(--nn-red-bright); }
+
+.nn-notify-food { border-left: 3px solid var(--nn-green); }
+.nn-notify-food .nn-notify-ico { color: var(--nn-green-bright); }
+
+.nn-notify-water { border-left: 3px solid var(--nn-blue); }
+.nn-notify-water .nn-notify-ico { color: var(--nn-blue-bright); }
+
+.nn-notify-disease { border-left: 3px solid var(--nn-red); }
+.nn-notify-disease .nn-notify-ico { color: var(--nn-red-bright); }
+
+.nn-notify-buff { border-left: 3px solid var(--nn-green); }
+.nn-notify-buff .nn-notify-ico { color: var(--nn-accent); }
+
+.nn-notify-debuff { border-left: 3px solid var(--nn-orange); }
+.nn-notify-debuff .nn-notify-ico { color: var(--nn-orange-bright); }
+
+.nn-notify-weight { border-left: 3px solid var(--nn-purple); }
+.nn-notify-weight .nn-notify-ico { color: var(--nn-purple); }
+
+.nn-notify-info { border-left: 3px solid var(--nn-accent-dim); }
+.nn-notify-info .nn-notify-ico { color: var(--nn-accent); }
+
+@media (max-width: 768px) {
+    #nn-notify-container {
+        top: 8px;
+        right: 8px;
+        left: 8px;
+        max-width: none;
+    }
+    .nn-notify { font-size: 0.7rem; padding: 8px 12px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HISTORY TAB
+   ═══════════════════════════════════════════════════════════════ */
+.nn-history-list {
+    max-height: 400px;
+    overflow-y: auto;
+    gap: 0 !important;
+}
+.nn-history-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 0.15s;
+}
+.nn-history-row:hover {
+    background: var(--nn-bg-hover);
+}
+.nn-history-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.nn-history-who {
+    font-size: 0.62rem;
+    color: var(--nn-accent);
+    font-weight: 600;
+}
+.nn-history-items {
+    font-size: 0.7rem;
+    color: var(--nn-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.nn-history-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.nn-history-cal {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--nn-green-bright);
+}
+.nn-history-time {
+    font-size: 0.58rem;
+    color: var(--nn-text-muted);
+}
+/* ═══════════════════════════════════════════════════════════════
+   DISEASE SEVERITY BADGES
+   ═══════════════════════════════════════════════════════════════ */
+.nn-severity-badge {
+    font-size: 0.54rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 700;
+}
+.nn-severity-badge.nn-sev-mild {
+    background: rgba(200, 168, 75, 0.15);
+    color: var(--nn-accent);
+}
+.nn-severity-badge.nn-sev-moderate {
+    background: rgba(200, 136, 74, 0.15);
+    color: var(--nn-orange-bright);
+}
+.nn-severity-badge.nn-sev-severe {
+    background: rgba(184, 74, 74, 0.15);
+    color: var(--nn-red-bright);
+}
+.nn-severity-badge.nn-sev-critical {
+    background: rgba(255, 51, 51, 0.2);
+    color: #ff5555;
+    animation: nn-pulse-badge 1.5s infinite;
+}
+@keyframes nn-pulse-badge {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Immunity indicator */
+.nn-immunity-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+    padding-top: 4px;
+}
+.nn-immunity-val {
+    font-weight: 700;
+}
+.nn-immunity-val.nn-imm-good { color: var(--nn-green-bright); }
+.nn-immunity-val.nn-imm-mid { color: var(--nn-orange-bright); }
+.nn-immunity-val.nn-imm-low { color: var(--nn-red-bright); }
+/* ═══════════════════════════════════════════════════════════════
+   CHARACTER EDITOR (шестерёнка)
+   ═══════════════════════════════════════════════════════════════ */
+.nn-char-gear {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--nn-border);
+    background: transparent;
+    color: var(--nn-text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--nn-transition-fast);
+    z-index: 3;
+}
+.nn-char-gear:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+    background: rgba(200,168,75,0.06);
+    transform: rotate(45deg);
+}
+
+.nn-edit-panel {
+    margin-top: 10px;
+    padding: 12px;
+    background: var(--nn-bg);
+    border: 1px solid var(--nn-border-accent);
+    border-radius: var(--nn-radius-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: nn-fade-in 0.2s ease-out;
+}
+.nn-edit-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--nn-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.nn-edit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 10px;
+}
+.nn-edit-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.62rem;
+    color: var(--nn-text-dim);
+}
+.nn-edit-field {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    color: var(--nn-text);
+    padding: 4px 6px;
+    font-size: 0.7rem;
+    outline: none;
+}
+.nn-edit-field:focus { border-color: var(--nn-accent-dim); }
+
+.nn-edit-goal-row, .nn-edit-preg-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+    padding-top: 6px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+.nn-edit-manual {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+}
+.nn-edit-manual input { accent-color: var(--nn-accent); }
+.nn-edit-goal-input, .nn-edit-preg-week {
+    width: 80px;
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    color: var(--nn-text);
+    padding: 4px 6px;
+    font-size: 0.7rem;
+    outline: none;
+}
+.nn-edit-goal-input:disabled, .nn-edit-preg-week:disabled { opacity: 0.4; }
+.nn-edit-goal-hint {
+    font-size: 0.58rem;
+    color: var(--nn-text-muted);
+}
+
+.nn-edit-btns {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding-top: 4px;
+}
+.nn-edit-recalc, .nn-edit-done {
+    font-size: 0.64rem;
+    padding: 5px 12px;
+    border-radius: var(--nn-radius-xs);
+    border: 1px solid var(--nn-border);
+    background: var(--nn-bg-section);
+    color: var(--nn-text);
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-edit-recalc:hover { border-color: var(--nn-accent-dim); color: var(--nn-accent); }
+.nn-edit-done {
+    background: var(--nn-accent-dim);
+    color: var(--nn-bg);
+    border-color: var(--nn-accent);
+}
+.nn-edit-done:hover { background: var(--nn-accent); }
+
+@media (max-width: 768px) {
+    .nn-edit-grid { grid-template-columns: 1fr; }
+}
+/* ═══════════════════════════════════════════════════════════════
+   STATUS & CONDITIONS TABS
+   ═══════════════════════════════════════════════════════════════ */
+.nn-status-char {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-md);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.nn-status-char-header {
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.nn-status-char-name {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--nn-text);
+}
+
+/* Иммунитет */
+.nn-immunity-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.68rem;
+    color: var(--nn-text-dim);
+}
+.nn-immunity-bar {
+    flex: 1;
+    height: 6px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.nn-immunity-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+.nn-immunity-fill.nn-imm-good { background: var(--nn-bar-health); }
+.nn-immunity-fill.nn-imm-mid  { background: var(--nn-bar-warn); }
+.nn-immunity-fill.nn-imm-low  { background: var(--nn-bar-danger); }
+.nn-immunity-val { font-weight: 700; white-space: nowrap; }
+.nn-immunity-val.nn-imm-good { color: var(--nn-green-bright); }
+.nn-immunity-val.nn-imm-mid  { color: var(--nn-orange-bright); }
+.nn-immunity-val.nn-imm-low  { color: var(--nn-red-bright); }
+
+/* Беременность */
+.nn-status-preg {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    background: rgba(200,168,75,0.06);
+    border: 1px solid var(--nn-accent-dim);
+    border-radius: var(--nn-radius-sm);
+    font-size: 0.7rem;
+    color: var(--nn-text);
+}
+.nn-status-preg-icon { font-size: 1.3rem; }
+.nn-status-preg-note {
+    font-size: 0.62rem;
+    color: var(--nn-text-dim);
+    margin-top: 3px;
+}
+
+/* Колонки баффов/дебаффов */
+.nn-status-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+/* Полные карточки болезней */
+.nn-cond-full {
+    padding: 10px 12px;
+    border-radius: var(--nn-radius-sm);
+    border-left: 3px solid var(--nn-orange);
+    background: rgba(200,136,74,0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nn-cond-full.nn-sev-severe { border-left-color: var(--nn-red); background: rgba(184,74,74,0.06); }
+.nn-cond-full.nn-sev-critical {
+    border-left-color: #ff3333;
+    background: rgba(255,51,51,0.08);
+    animation: nn-pulse-danger 1.8s infinite;
+}
+.nn-cond-full-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.nn-cond-full-name {
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--nn-text);
+}
+.nn-cond-full-symptoms {
+    font-size: 0.66rem;
+    color: var(--nn-text-dim);
+    line-height: 1.4;
+    font-style: italic;
+}
+.nn-cond-full-effects {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+.nn-cond-effect-pill {
+    font-size: 0.6rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.05);
+    color: var(--nn-text-dim);
+}
+.nn-cond-full-since {
+    font-size: 0.58rem;
+    color: var(--nn-text-muted);
+}
+
+@media (max-width: 768px) {
+    .nn-status-columns { grid-template-columns: 1fr; }
+}
+/* ═══════════════════════════════════════════════════════════════
+   THEME ENGINE v3 — Glass themes (violet / rose / adaptive)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Убираем ВСЕ тени текста для читаемости ─── */
+#nn-card, #nn-card *,
+#nn-minibar, #nn-minibar *,
+#nn-notify-container, #nn-notify-container *,
+#nn-toggle, #nn-toggle * {
+    text-shadow: none !important;
+}
+
+/* ─── TOGGLE: прозрачный, без кружка и обводки ─── */
+#nn-toggle {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 8px;
+    color: var(--nn-accent);
+}
+#nn-toggle:hover {
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 6px var(--nn-accent-glow-strong));
+    box-shadow: none !important;
+}
+#nn-toggle:active { transform: scale(0.9); }
+.nn-toggle-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.nn-toggle-icon svg { display: block; }
+
+/* ─── ПЕРЕКЛЮЧАТЕЛЬ ТЕМ (точки в шапке) ─── */
+.nn-theme-switcher {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-right: 8px;
+}
+.nn-theme-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    padding: 0;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.nn-theme-dot:hover { transform: scale(1.2); }
+.nn-dot-violet   { background: linear-gradient(135deg, #241540, #a06cf5); }
+.nn-dot-rose     { background: linear-gradient(135deg, #fff0f6, #f08cb8); }
+.nn-dot-adaptive { background: linear-gradient(135deg, var(--SmartThemeBlurTintColor, #333), var(--SmartThemeQuoteColor, #999)); }
+.nn-theme-dot-active {
+    transform: scale(1.2);
+    border-color: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   БАЗА СТЕКЛА (общее для всех тем)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card {
+    background: var(--nn-bg);
+    backdrop-filter: blur(16px) saturate(1.3);
+    -webkit-backdrop-filter: blur(16px) saturate(1.3);
+    border: 1px solid var(--nn-border);
+}
+#nn-minibar {
+    background: var(--nn-bg-card);
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+.nn-notify {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+/* ─── Неоновая пастельная подсветка: ЮЗЕР vs БОТ ─── */
+.nn-chars-row .nn-char-card:nth-child(1) {
+    border-color: var(--nn-user-glow-border);
+    box-shadow: 0 0 16px var(--nn-user-glow),
+                inset 0 0 24px var(--nn-user-glow-soft);
+}
+.nn-chars-row .nn-char-card:nth-child(1):hover {
+    box-shadow: 0 0 24px var(--nn-user-glow),
+                inset 0 0 24px var(--nn-user-glow-soft);
+}
+.nn-chars-row .nn-char-card:nth-child(2) {
+    border-color: var(--nn-bot-glow-border);
+    box-shadow: 0 0 16px var(--nn-bot-glow),
+                inset 0 0 24px var(--nn-bot-glow-soft);
+}
+.nn-chars-row .nn-char-card:nth-child(2):hover {
+    box-shadow: 0 0 24px var(--nn-bot-glow),
+                inset 0 0 24px var(--nn-bot-glow-soft);
+}
+
+/* ─── ФОНОВАЯ КАРТИНКА С ОВЕРЛЕЕМ ─── */
+#nn-card.nn-has-bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: var(--nn-bg-image);
+    background-size: cover;
+    background-position: center;
+    border-radius: inherit;
+    z-index: 0;
+}
+#nn-card.nn-has-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--nn-overlay-color, #0a0812);
+    opacity: var(--nn-bg-overlay, 0.55);
+    border-radius: inherit;
+    z-index: 0;
+}
+#nn-card > * {
+    position: relative;
+    z-index: 1;
+}
+/* При картинке секции чуть плотнее, чтобы текст читался */
+#nn-card.nn-has-bg .nn-section,
+#nn-card.nn-has-bg .nn-char-card,
+#nn-card.nn-has-bg .nn-status-char {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ТЕМА 1 — ЧЁРНО-ФИОЛЕТОВАЯ (violet)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card[data-nn-theme="violet"],
+#nn-minibar[data-nn-theme="violet"],
+#nn-toggle[data-nn-theme="violet"],
+#nn-notify-container[data-nn-theme="violet"] {
+    --nn-bg: rgba(15, 9, 26, 0.82);
+    --nn-bg-card: rgba(26, 17, 45, 0.7);
+    --nn-bg-section: rgba(34, 23, 58, 0.55);
+    --nn-bg-hover: rgba(46, 32, 76, 0.6);
+    --nn-border: rgba(155, 110, 245, 0.18);
+    --nn-border-accent: rgba(155, 110, 245, 0.4);
+
+    --nn-text: #efe9fb;
+    --nn-text-dim: #9d8fc0;
+    --nn-text-muted: #6a5c90;
+
+    --nn-accent: #b78cff;
+    --nn-accent-dim: #8a63d4;
+    --nn-accent-glow: rgba(183, 140, 255, 0.2);
+    --nn-accent-glow-strong: rgba(183, 140, 255, 0.45);
+
+    --nn-shadow: 0 12px 48px rgba(0, 0, 0, 0.65), 0 0 24px rgba(155, 110, 245, 0.12);
+
+    /* неон: юзер — пастельно-фиолетовый, бот — пастельно-розовый */
+    --nn-user-glow: rgba(203, 166, 255, 0.28);
+    --nn-user-glow-soft: rgba(203, 166, 255, 0.05);
+    --nn-user-glow-border: rgba(203, 166, 255, 0.45);
+    --nn-bot-glow: rgba(255, 158, 219, 0.28);
+    --nn-bot-glow-soft: rgba(255, 158, 219, 0.05);
+    --nn-bot-glow-border: rgba(255, 158, 219, 0.45);
+
+    --nn-overlay-color: #0f091a;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ТЕМА 2 — БЕЛО-РОЗОВАЯ (rose)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card[data-nn-theme="rose"],
+#nn-minibar[data-nn-theme="rose"],
+#nn-toggle[data-nn-theme="rose"],
+#nn-notify-container[data-nn-theme="rose"] {
+    --nn-bg: rgba(255, 246, 251, 0.85);
+    --nn-bg-card: rgba(255, 236, 245, 0.75);
+    --nn-bg-section: rgba(255, 255, 255, 0.55);
+    --nn-bg-hover: rgba(255, 224, 238, 0.7);
+    --nn-border: rgba(230, 140, 180, 0.25);
+    --nn-border-accent: rgba(230, 140, 180, 0.5);
+
+    --nn-text: #3d2733;
+    --nn-text-dim: #8f6a7e;
+    --nn-text-muted: #bc9cab;
+
+    --nn-accent: #e0679e;
+    --nn-accent-dim: #c9548a;
+    --nn-accent-glow: rgba(224, 103, 158, 0.2);
+    --nn-accent-glow-strong: rgba(224, 103, 158, 0.45);
+
+    --nn-green-bright: #4a9a3a;
+    --nn-orange-bright: #c8752a;
+    --nn-red-bright: #c83a4a;
+    --nn-blue-bright: #3a7ab8;
+
+    --nn-shadow: 0 12px 48px rgba(180, 100, 140, 0.25), 0 0 24px rgba(240, 140, 184, 0.15);
+
+    /* неон: юзер — пастельно-розовый, бот — пастельно-лавандовый */
+    --nn-user-glow: rgba(255, 140, 190, 0.35);
+    --nn-user-glow-soft: rgba(255, 140, 190, 0.07);
+    --nn-user-glow-border: rgba(255, 140, 190, 0.55);
+    --nn-bot-glow: rgba(180, 150, 255, 0.35);
+    --nn-bot-glow-soft: rgba(180, 150, 255, 0.07);
+    --nn-bot-glow-border: rgba(180, 150, 255, 0.55);
+
+    --nn-overlay-color: #fff0f7;
+}
+
+/* Rose — светлая тема: тёмные дорожки баров и разделители */
+#nn-card[data-nn-theme="rose"] .nn-cal-bar,
+#nn-card[data-nn-theme="rose"] .nn-stat-bar,
+#nn-card[data-nn-theme="rose"] .nn-immunity-bar {
+    background: rgba(120, 60, 90, 0.1);
+}
+#nn-card[data-nn-theme="rose"] .nn-weight-line,
+#nn-card[data-nn-theme="rose"] .nn-section-header,
+#nn-card[data-nn-theme="rose"] .nn-section-footer,
+#nn-card[data-nn-theme="rose"] .nn-info-item,
+#nn-card[data-nn-theme="rose"] .nn-history-row {
+    border-color: rgba(120, 60, 90, 0.1);
+}
+#nn-card[data-nn-theme="rose"] .nn-cond-effect-pill {
+    background: rgba(120, 60, 90, 0.08);
+}
+#nn-card[data-nn-theme="rose"] .nn-theme-dot {
+    border-color: rgba(120, 60, 90, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ТЕМА 3 — АДАПТИВНАЯ (цвета текущей темы SillyTavern)
+   ═══════════════════════════════════════════════════════════════ */
+#nn-card[data-nn-theme="adaptive"],
+#nn-minibar[data-nn-theme="adaptive"],
+#nn-toggle[data-nn-theme="adaptive"],
+#nn-notify-container[data-nn-theme="adaptive"] {
+    --nn-bg: var(--SmartThemeBlurTintColor, rgba(20, 20, 25, 0.85));
+    --nn-bg-card: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1a1a20) 80%, var(--SmartThemeBodyColor, #fff) 6%);
+    --nn-bg-section: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1a1a20) 70%, var(--SmartThemeBodyColor, #fff) 5%);
+    --nn-bg-hover: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1a1a20) 70%, var(--SmartThemeBodyColor, #fff) 12%);
+    --nn-border: color-mix(in srgb, var(--SmartThemeBorderColor, #444) 60%, transparent);
+    --nn-border-accent: var(--SmartThemeQuoteColor, #888);
+
+    --nn-text: var(--SmartThemeBodyColor, #e0e0e0);
+    --nn-text-dim: color-mix(in srgb, var(--SmartThemeBodyColor, #e0e0e0) 60%, transparent);
+    --nn-text-muted: color-mix(in srgb, var(--SmartThemeBodyColor, #e0e0e0) 35%, transparent);
+
+    --nn-accent: var(--SmartThemeQuoteColor, #c8a84b);
+    --nn-accent-dim: color-mix(in srgb, var(--SmartThemeQuoteColor, #c8a84b) 70%, transparent);
+    --nn-accent-glow: color-mix(in srgb, var(--SmartThemeQuoteColor, #c8a84b) 20%, transparent);
+    --nn-accent-glow-strong: color-mix(in srgb, var(--SmartThemeQuoteColor, #c8a84b) 45%, transparent);
+
+    --nn-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+
+    /* неон: юзер — цвет цитат темы, бот — цвет курсива темы */
+    --nn-user-glow: color-mix(in srgb, var(--SmartThemeQuoteColor, #c8a84b) 30%, transparent);
+    --nn-user-glow-soft: color-mix(in srgb, var(--SmartThemeQuoteColor, #c8a84b) 6%, transparent);
+    --nn-user-glow-border: color-mix(in srgb, var(--SmartThemeQuoteColor, #c8a84b) 50%, transparent);
+    --nn-bot-glow: color-mix(in srgb, var(--SmartThemeEmColor, #8ab4f8) 30%, transparent);
+    --nn-bot-glow-soft: color-mix(in srgb, var(--SmartThemeEmColor, #8ab4f8) 6%, transparent);
+    --nn-bot-glow-border: color-mix(in srgb, var(--SmartThemeEmColor, #8ab4f8) 50%, transparent);
+
+    --nn-overlay-color: var(--SmartThemeBlurTintColor, #14141a);
+}
+/* ─── ВЫБОР ТЕМЫ В НАСТРОЙКАХ ─── */
+.nn-theme-picker {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+.nn-theme-choice {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+    padding: 0;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.nn-theme-choice:hover { transform: scale(1.15); }
+.nn-theme-choice.nn-choice-active {
+    border-color: var(--nn-accent);
+    box-shadow: 0 0 10px var(--nn-accent-glow-strong);
+    transform: scale(1.15);
+}
+
+/* Ползунок затемнения */
+.nn-settings-row input[type="range"] {
+    flex: 1;
+    min-width: 100px;
+    accent-color: var(--nn-accent);
+    cursor: pointer;
+}
+#nn-set-overlay-val {
+    font-size: 0.68rem;
+    color: var(--nn-text);
+    min-width: 38px;
+    text-align: right;
+    font-weight: 600;
+}
+/* ─── FIX: перебиваем стили темы таверны ─── */
+
+/* Кнопка закрытия карточки */
+#nn-card .nn-header .nn-header-right button#nn-btn-close.nn-header-btn {
+    background: transparent !important;
+    border: 1px solid var(--nn-border) !important;
+    color: var(--nn-text-dim) !important;
+    box-shadow: none !important;
+    border-radius: 50% !important;
+    width: 30px !important;
+    height: 30px !important;
+    text-shadow: none !important;
+    filter: none !important;
+}
+#nn-card .nn-header .nn-header-right button#nn-btn-close.nn-header-btn:hover {
+    border-color: var(--nn-accent-dim) !important;
+    color: var(--nn-accent) !important;
+    background: var(--nn-bg-hover) !important;
+}
+
+/* Ползунок затемнения фона */
+#nn-card .nn-settings-row input[type="range"]#nn-set-overlay {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    height: 20px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    flex: 1 !important;
+    min-width: 100px !important;
+    cursor: pointer !important;
+}
+/* дорожка (WebKit/Chrome) */
+#nn-card input[type="range"]#nn-set-overlay::-webkit-slider-runnable-track {
+    height: 5px !important;
+    border-radius: 3px !important;
+    background: var(--nn-border) !important;
+    border: none !important;
+}
+/* бегунок (WebKit/Chrome) */
+#nn-card input[type="range"]#nn-set-overlay::-webkit-slider-thumb {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    width: 14px !important;
+    height: 14px !important;
+    margin-top: -4.5px !important;
+    border-radius: 50% !important;
+    background: var(--nn-accent) !important;
+    border: none !important;
+    box-shadow: 0 0 6px var(--nn-accent-glow) !important;
+    cursor: pointer !important;
+}
+/* дорожка (Firefox) */
+#nn-card input[type="range"]#nn-set-overlay::-moz-range-track {
+    height: 5px !important;
+    border-radius: 3px !important;
+    background: var(--nn-border) !important;
+    border: none !important;
+}
+/* бегунок (Firefox) */
+#nn-card input[type="range"]#nn-set-overlay::-moz-range-thumb {
+    width: 14px !important;
+    height: 14px !important;
+    border-radius: 50% !important;
+    background: var(--nn-accent) !important;
+    border: none !important;
+    box-shadow: 0 0 6px var(--nn-accent-glow) !important;
+    cursor: pointer !important;
+}
+/* ═══════════════════════════════════════════════════════════════
+   FIX PACK — цвета баров, мини-бар, динамические калории
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Сытость: коралловый (не сливается со здоровьем) ─── */
+.nn-stat-bar-fill.nn-fill-satiety {
+    background: linear-gradient(90deg, #d4644a, #f0946a) !important;
+}
+
+/* ─── Энергия: остаётся жёлтой, калории — цвет темы (см. ниже),
+       поэтому больше не сливаются ─── */
+
+/* ─── КАЛОРИИ: динамический бар в цвет темы с "живым" переливом ─── */
+.nn-cal-bar-fill {
+    background: linear-gradient(90deg,
+        var(--nn-accent-dim),
+        var(--nn-accent),
+        var(--nn-accent-dim)) !important;
+    background-size: 200% 100% !important;
+    animation: nn-cal-flow 3s linear infinite;
+}
+@keyframes nn-cal-flow {
+    0%   { background-position: 0% 0; }
+    100% { background-position: 200% 0; }
+}
+/* Динамические состояния — сохраняем перелив, меняем цвет */
+.nn-cal-bar-fill.nn-warn {
+    background: linear-gradient(90deg, #b8884a, #e8a85a, #b8884a) !important;
+    background-size: 200% 100% !important;
+}
+.nn-cal-bar-fill.nn-danger {
+    background: linear-gradient(90deg, #a83a3a, #d85a5a, #a83a3a) !important;
+    background-size: 200% 100% !important;
+    animation: nn-cal-flow 1.5s linear infinite; /* быстрее = тревожнее */
+}
+.nn-cal-bar-fill.nn-overfill {
+    background: linear-gradient(90deg, #7a3ab8, #9a5ad8, #7a3ab8) !important;
+    background-size: 200% 100% !important;
+}
+
+/* ─── МИНИ-БАР: цветные SVG-иконки ─── */
+.nn-mini-ico {
+    display: inline-flex;
+    align-items: center;
+}
+.nn-mini-ico svg { display: block; }
+.nn-ico-cal   { color: var(--nn-accent); }
+.nn-ico-sat   { color: #e8845a; }
+.nn-ico-water { color: var(--nn-blue-bright, #5ca8d8); }
+
+/* ─── МИНИ-БАР в розовой теме: непрозрачный ─── */
+#nn-minibar[data-nn-theme="rose"] {
+    background: #fdeef6 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-color: rgba(230, 140, 180, 0.4) !important;
+}
+/* Подпись владельца состояния (· Имя) */
+.nn-condition-owner {
+    opacity: 0.9;
+    font-size: 0.82em;
+    font-weight: 500;
+}
+/* Пользователь — тёплый золотистый; бот — холодный голубой */
+.nn-owner-user { color: #e0b45c; }
+.nn-owner-bot  { color: #6bb6e0; }
+
+/* ─── Значки эффектов в мини-баре ─── */
+.nn-mini-fx {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.62rem;
+    font-weight: 700;
+}
+.nn-mini-fx .nn-fx-buff    { color: var(--nn-green-bright); }
+.nn-mini-fx .nn-fx-debuff  { color: var(--nn-orange-bright); }
+.nn-mini-fx .nn-fx-disease { color: var(--nn-red-bright); }
+
+/* ═══ Вкладка «Продукты» v2 — цвета из переменных темы ═══ */
+.nn-prod-who { margin-left: auto; display: flex; gap: 4px; }
+.nn-prod-who-btn {
+    padding: 3px 10px; font-size: 0.66rem; border-radius: 10px;
+    border: 1px solid var(--nn-border); background: var(--nn-bg-card);
+    color: var(--nn-text-dim); cursor: pointer; transition: var(--nn-transition-fast);
+}
+.nn-prod-who-btn:disabled { opacity: 0.35; cursor: default; }
+.nn-prod-who-active {
+    border-color: var(--nn-accent); color: var(--nn-accent);
+    background: var(--nn-accent-glow); box-shadow: 0 0 8px var(--nn-accent-glow);
+}
+
+.nn-prod-cats {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+    gap: 6px; margin-bottom: 10px;
+}
+.nn-prod-cat {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 8px 4px; border-radius: var(--nn-radius-sm);
+    border: 1px solid var(--nn-border); background: var(--nn-bg-card);
+    color: var(--nn-text-dim); cursor: pointer; transition: var(--nn-transition-fast);
+}
+.nn-prod-cat-ico svg { width: 18px; height: 18px; display: block; }
+.nn-prod-cat-name { font-size: 0.58rem; text-align: center; line-height: 1.2; }
+.nn-prod-cat:hover { border-color: var(--nn-accent-dim); color: var(--nn-text); }
+.nn-prod-cat-active {
+    border-color: var(--nn-accent); color: var(--nn-accent);
+    background: var(--nn-accent-glow);
+    box-shadow: 0 0 10px var(--nn-accent-glow), inset 0 0 12px var(--nn-accent-glow);
+}
+
+.nn-prod-search {
+    width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 6px 10px;
+    border-radius: var(--nn-radius-sm); border: 1px solid var(--nn-border);
+    background: var(--nn-bg-card); color: var(--nn-text);
+    font-size: 0.76rem; outline: none;
+}
+.nn-prod-search:focus { border-color: var(--nn-accent-dim); }
+.nn-prod-search::placeholder { color: var(--nn-text-muted); }
+
+.nn-prod-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 2px; }
+.nn-prod-list::-webkit-scrollbar { width: 4px; }
+.nn-prod-list::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
+
+.nn-prod-row {
+    border-radius: var(--nn-radius-sm); border: 1px solid transparent;
+    background: var(--nn-bg-card); transition: var(--nn-transition-fast);
+}
+.nn-prod-row-top {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; padding: 6px 10px; cursor: pointer;
+}
+.nn-prod-row:hover { background: var(--nn-bg-hover); }
+.nn-prod-row-sel {
+    border-color: var(--nn-accent-dim);
+    box-shadow: 0 0 8px var(--nn-accent-glow);
+}
+.nn-prod-name { font-size: 0.74rem; color: var(--nn-text); }
+.nn-prod-cal { font-size: 0.64rem; color: var(--nn-text-dim); white-space: nowrap; }
+
+.nn-prod-panel {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 10px 10px; border-top: 1px solid var(--nn-border);
+}
+.nn-prod-gram-row { display: flex; align-items: center; gap: 6px; }
+.nn-prod-step {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 1px solid var(--nn-border); background: var(--nn-bg-section);
+    color: var(--nn-text); font-size: 14px; cursor: pointer; line-height: 1;
+}
+.nn-prod-step:hover { border-color: var(--nn-accent-dim); color: var(--nn-accent); }
+.nn-prod-gram-input {
+    width: 70px; text-align: center; padding: 4px 6px;
+    border-radius: var(--nn-radius-xs); border: 1px solid var(--nn-border);
+    background: var(--nn-bg-section); color: var(--nn-text);
+    font-size: 0.74rem; outline: none;
+}
+.nn-prod-unit { font-size: 0.66rem; color: var(--nn-text-dim); }
+.nn-prod-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.nn-prod-chip {
+    padding: 2px 9px; font-size: 0.62rem; border-radius: 10px;
+    border: 1px solid var(--nn-border); background: transparent;
+    color: var(--nn-text-dim); cursor: pointer; transition: var(--nn-transition-fast);
+}
+.nn-prod-chip:hover { color: var(--nn-text); }
+.nn-prod-chip-active { border-color: var(--nn-accent); color: var(--nn-accent); background: var(--nn-accent-glow); }
+.nn-prod-eat {
+    align-self: flex-start; padding: 6px 14px; font-size: 0.7rem; font-weight: 600;
+    border-radius: var(--nn-radius-sm); border: 1px solid var(--nn-accent);
+    background: var(--nn-accent-glow); color: var(--nn-accent);
+    cursor: pointer; transition: var(--nn-transition-fast);
+}
+.nn-prod-eat:hover { background: var(--nn-accent); color: var(--nn-bg); box-shadow: 0 0 12px var(--nn-accent-glow-strong); }
+/* Скролл внутри секций баффов/дебаффов/состояний в обзоре */
+.nn-section-scroll {
+    max-height: 150px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.nn-section-scroll::-webkit-scrollbar { width: 4px; }
+.nn-section-scroll::-webkit-scrollbar-track { background: transparent; }
+.nn-section-scroll::-webkit-scrollbar-thumb {
+    background: var(--nn-border);
+    border-radius: 2px;
+}
+.nn-dbg-group-label {
+    font-size: 0.66rem;
+    color: var(--nn-accent);
+    margin: 8px 0 3px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+/* ═══════════════════════════════════════════════════════════════
+   WEIGHT TAB
+   ═══════════════════════════════════════════════════════════════ */
+
+.nn-weight-cards-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.nn-weight-card {
+    background: var(--nn-bg-card);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-sm);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.nn-weight-card-name {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--nn-text-dim);
+}
+.nn-weight-card-big {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--nn-text);
+    line-height: 1;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.nn-weight-unit {
+    font-size: 0.9rem;
+    font-weight: 400;
+    color: var(--nn-text-dim);
+}
+.nn-weight-card-sub {
+    font-size: 0.64rem;
+    color: var(--nn-text-dim);
+}
+.nn-trend-up     { color: var(--nn-red-bright);    font-size: 0.85rem; }
+.nn-trend-down   { color: var(--nn-blue-bright);   font-size: 0.85rem; }
+.nn-trend-stable { color: var(--nn-text-muted);    font-size: 0.6rem; }
+
+.nn-bmi-low    { color: var(--nn-blue-bright);   font-weight: 700; }
+.nn-bmi-normal { color: var(--nn-green-bright);  font-weight: 700; }
+.nn-bmi-high   { color: var(--nn-orange-bright); font-weight: 700; }
+.nn-bmi-obese  { color: var(--nn-red-bright);    font-weight: 700; }
+
+/* Weight history table */
+.nn-wh-table-wrap {
+    overflow-x: auto;
+    border-radius: var(--nn-radius-sm);
+    border: 1px solid var(--nn-border);
+}
+.nn-wh-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.68rem;
+}
+.nn-wh-table thead tr {
+    background: var(--nn-bg-hover);
+}
+.nn-wh-table th {
+    padding: 7px 10px;
+    text-align: left;
+    font-weight: 700;
+    color: var(--nn-text-dim);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--nn-border);
+}
+.nn-wh-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.nn-wh-table tbody tr:hover { background: var(--nn-bg-hover); }
+.nn-wh-table tbody tr:last-child td { border-bottom: none; }
+
+.nn-wh-day   { color: var(--nn-accent); font-weight: 600; }
+.nn-wh-name  { font-weight: 600; }
+.nn-wh-weight { font-weight: 700; color: var(--nn-text); }
+.nn-wh-cal   { color: var(--nn-text-muted); font-size: 0.62rem; }
+.nn-wh-date  { color: var(--nn-text-muted); font-size: 0.6rem; }
+
+.nn-wh-gain    { color: var(--nn-orange-bright); font-weight: 700; }
+.nn-wh-loss    { color: var(--nn-blue-bright);   font-weight: 700; }
+.nn-wh-neutral { color: var(--nn-text-muted); }
+
+.nn-reason-pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 8px;
+    font-size: 0.6rem;
+    font-weight: 600;
+}
+.nn-reason-surplus { background: rgba(200, 136, 74, 0.15); color: var(--nn-orange-bright); }
+.nn-reason-deficit { background: rgba(74, 138, 184, 0.15); color: var(--nn-blue-bright); }
+.nn-reason-normal  { background: rgba(90, 154, 74, 0.12);  color: var(--nn-green-bright); }
+
+.nn-section-count {
+    margin-left: auto;
+    font-size: 0.62rem;
+    color: var(--nn-text-muted);
+}
+
+@media (max-width: 768px) {
+    .nn-weight-cards-row { grid-template-columns: 1fr; }
+    .nn-wh-cal, .nn-wh-date { display: none; }
+}
+/* ═══════════════════════════════════════════════════════════════PIN + COMPACT BUTTON STATES═══════════════════════════════════════════════════════════════ */
+.nn-header-btn.nn-btn-active {
+    background: var(--nn-accent-glow) !important;
+    border-color: var(--nn-accent) !important;
+    color: var(--nn-accent) !important;
+    box-shadow: 0 0 8px var(--nn-accent-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COMPACT MODE
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Кнопка поворота — видна только в compact */
+.nn-layout-only { display: none !important; }
+#nn-card.nn-compact .nn-layout-only { display: flex !important; }
+
+/* Карточка в compact: вертикальная (по умолчанию) */
+#nn-card.nn-compact {
+    width: min(420px, 94vw) !important;
+    height: fit-content !important;
+    max-height: 85vh !important;
+}
+
+/* Карточка в compact: горизонтальная */
+#nn-card.nn-compact.nn-compact-h {
+    width: min(820px, 94vw) !important;
+    height: fit-content !important;
+    max-height: 85vh !important;
+}
+
+/* В compact скрываем табы */
+#nn-card.nn-compact .nn-tabs { display: none !important; }
+
+/* Обёртка двух карточек */
+.nn-compact-wrap {
+    display: flex;
+    gap: 12px;
+}
+.nn-compact-wrap.nn-layout-vertical   { flex-direction: column; }
+.nn-compact-wrap.nn-layout-horizontal { flex-direction: row; align-items: flex-start; }
+.nn-compact-wrap.nn-layout-horizontal .nn-cmp-card { flex: 1; min-width: 0; }
+
+/* ─── Одна карточка персонажа (compact) ─── */
+.nn-cmp-card {
+    background: var(--nn-bg-section);
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Верхняя строка */
+.nn-cmp-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+.nn-cmp-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 9px;
+    overflow: hidden;
+    border: 1.5px solid var(--nn-border);
+    flex-shrink: 0;
+    background: var(--nn-bg);
+}
+.nn-cmp-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.nn-cmp-head {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.nn-cmp-name {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--nn-text);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.nn-cmp-name-icon { font-size: 0.66rem; color: var(--nn-accent); }
+.nn-cmp-subtitle {
+    font-size: 0.6rem;
+    color: var(--nn-text-muted);
+}
+.nn-cmp-cal-row {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    margin-top: 1px;
+}
+.nn-cmp-cal-cur  { font-size: 1.3rem; font-weight: 800; color: var(--nn-text); line-height: 1; }
+.nn-cmp-cal-sep  { font-size: 0.8rem; color: var(--nn-text-muted); }
+.nn-cmp-cal-goal { font-size: 0.82rem; font-weight: 500; color: var(--nn-text-dim); }
+.nn-cmp-cal-unit { font-size: 0.62rem; color: var(--nn-text-muted); margin-left: 4px; }
+
+.nn-cmp-calbar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nn-cmp-calbar {
+    flex: 1;
+    height: 5px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.nn-cmp-calbar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--nn-bar-good);
+    transition: width 0.5s ease;
+}
+.nn-cmp-calbar-fill.nn-overfill { background: var(--nn-bar-overfill); }
+.nn-cmp-calbar-fill.nn-warn     { background: var(--nn-bar-warn); }
+.nn-cmp-calbar-fill.nn-danger   { background: var(--nn-bar-danger); }
+.nn-cmp-cal-pct { font-size: 0.58rem; color: var(--nn-text-dim); min-width: 26px; text-align: right; }
+
+/* Статус-кружок справа */
+.nn-cmp-status-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+}
+.nn-cmp-circle {
+    width: 42px !important;
+    height: 42px !important;
+    font-size: 0.85rem !important;
+}
+.nn-cmp-status-txt {
+    font-size: 0.58rem;
+    color: var(--nn-text-dim);
+    text-align: center;
+}
+
+/* Статы */
+.nn-cmp-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.nn-cmp-stat-row {
+    display: grid;
+    grid-template-columns: 16px 58px 1fr 28px;
+    align-items: center;
+    gap: 5px;
+}
+.nn-cmp-stat-icon  { font-size: 0.66rem; text-align: center; }
+.nn-cmp-stat-label { font-size: 0.62rem; color: var(--nn-text-dim); }
+.nn-cmp-stat-bar {
+    height: 4px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.nn-cmp-stat-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+/* Переиспользуем логику цветов из полного вида */
+.nn-cmp-stat-fill.nn-fill-satiety { background: linear-gradient(90deg, #d4644a, #f0946a); }
+.nn-cmp-stat-fill.nn-fill-water   { background: var(--nn-bar-hydration); }
+.nn-cmp-stat-fill.nn-fill-energy  { background: var(--nn-bar-energy); }
+.nn-cmp-stat-fill.nn-fill-health  { background: var(--nn-bar-health); }
+.nn-cmp-stat-val {
+    font-size: 0.6rem;
+    color: var(--nn-text);
+    text-align: right;
+    font-weight: 600;
+}
+
+/* Пилюли эффектов (баффы/дебаффы/болезни) */
+.nn-cmp-fx {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+.nn-cmp-pill {
+    font-size: 0.58rem;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 9px;
+    white-space: nowrap;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.nn-pill-buff {
+    background: rgba(90, 154, 74, 0.15);
+    color: var(--nn-green-bright);
+}
+.nn-pill-debuff {
+    background: rgba(200, 136, 74, 0.15);
+    color: var(--nn-orange-bright);
+}
+.nn-pill-disease {
+    background: rgba(184, 74, 74, 0.15);
+    color: var(--nn-red-bright);
+}
+
+/* Футер компактного режима */
+.nn-cmp-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 6px;
+    border-top: 1px solid var(--nn-border);
+    margin-top: 2px;
+}
+.nn-cmp-day {
+    font-size: 0.63rem;
+    color: var(--nn-accent);
+    font-weight: 600;
+}
+.nn-cmp-expand {
+    font-size: 0.62rem;
+    background: none;
+    border: 1px solid var(--nn-border);
+    border-radius: var(--nn-radius-xs);
+    color: var(--nn-text-dim);
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: var(--nn-transition-fast);
+}
+.nn-cmp-expand:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+}
+
+/* ─── Мобильная адаптация compact ─── */
+@media (max-width: 768px) {
+    #nn-card.nn-compact,
+    #nn-card.nn-compact.nn-compact-h {
+        width: 96vw !important;
+    }
+    .nn-compact-wrap.nn-layout-horizontal {
+        flex-direction: column;
+    }
+    .nn-cmp-avatar { width: 44px; height: 44px; }
+    .nn-cmp-cal-cur { font-size: 1.1rem; }
+    .nn-cmp-circle { width: 36px !important; height: 36px !important; font-size: 0.75rem !important; }
+}
+
+/* ─── Pinned: карточка остаётся поверх и не исчезает при клике вне ─── */
+#nn-card.nn-pinned {
+    box-shadow:
+        var(--nn-shadow),
+        0 0 0 2px var(--nn-accent-dim),
+        0 0 20px var(--nn-accent-glow);
+}
+/*═══════════════════════════════════════════════════════════════HELP MODAL
+   ═══════════════════════════════════════════════════════════════ */
+#nn-help-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200001;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: nn-fade-in 0.2s ease-out;
+}
+#nn-help-overlay.nn-hidden { display: none !important; }
+
+#nn-help-modal {
+    width: min(600px, 92vw);
+    max-height: 82vh;
+    background: var(--nn-bg-card);
+    border: 1px solid var(--nn-border-accent);
+    border-radius: var(--nn-radius);
+    box-shadow: 0 16px 64px rgba(0, 0, 0, 0.7), 0 0 32px var(--nn-accent-glow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.nn-help-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--nn-border);
+    flex-shrink: 0;
+}
+.nn-help-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.nn-help-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--nn-text);
+}
+.nn-help-title-accent {
+    color: var(--nn-accent);
+}
+.nn-help-close {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--nn-border);
+    background: transparent;
+    color: var(--nn-text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--nn-transition-fast);flex-shrink: 0;
+}
+.nn-help-close:hover {
+    border-color: var(--nn-accent-dim);
+    color: var(--nn-accent);
+}
+
+.nn-help-body {
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.nn-help-body::-webkit-scrollbar { width: 4px; }
+.nn-help-body::-webkit-scrollbar-thumb { background: var(--nn-border); border-radius: 2px; }
+
+/* Секция гайда */
+.nn-help-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.nn-help-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.nn-help-section-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+.nn-help-section-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--nn-accent);
+    letter-spacing: 0.02em;
+}
+
+.nn-help-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-left: 4px;
+}
+.nn-help-p {
+    font-size: 0.82rem;
+    color: var(--nn-text);
+    line-height: 1.6;
+    margin: 0;opacity: 0.92;
+}
+.nn-help-p b { color: var(--nn-text); font-weight: 700; }
+.nn-help-p code {
+    font-family: inherit;
+    font-size: 0.76rem;
+    background: rgba(255,255,255,0.08);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--nn-accent);
+    font-weight: 600;
+}
+
+/* Строка-параметр (иконка + название + описание) */
+.nn-help-row {
+    display: grid;
+    grid-template-columns: 24px 80px 1fr;
+    align-items: start;
+    gap: 5px 10px;
+    font-size: 0.8rem;
+}
+.nn-help-row-icon { font-size: 0.9rem; line-height: 1.5; text-align: center; }
+.nn-help-row-name { font-weight: 700; color: var(--nn-text); line-height: 1.5; }
+.nn-help-row-desc { color: var(--nn-text); opacity: 0.8; line-height: 1.5; }
+
+/* Подсказка-блок */
+.nn-help-tip {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    background: rgba(200, 168, 75, 0.09);
+    border: 1px solid var(--nn-accent-dim);
+    border-radius: var(--nn-radius-sm);
+    font-size: 0.8rem;
+    color: var(--nn-text);
+    line-height: 1.6;
+    opacity: 0.95;
+}
+.nn-help-tip-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+.nn-help-tip b { color: var(--nn-accent); font-weight: 700; }
+
+
+/* Кнопка-имитация (визуальная пометка элемента интерфейса) */
+.nn-help-btn-mock {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.66rem;
+    padding: 2px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--nn-border);
+    background: var(--nn-bg-section);
+    color: var(--nn-text);
+    font-family: inherit;
+    vertical-align: middle;
+    pointer-events: none;
+}
+
+/* Разделитель между секциями */
+.nn-help-divider {
+    height: 1px;
+    background: rgba(255,255,255,0.04);
+    margin: 2px 0;
+}
+
+/* Футер модалки */
+.nn-help-footer {
+    padding: 10px 20px;
+    border-top: 1px solid var(--nn-border);
+    text-align: center;
+    font-size: 0.62rem;
+    color: var(--nn-text-muted);
+    flex-shrink: 0;
+}
+
+/* Мобилка */
+@media (max-width: 768px) {
+    #nn-help-modal {
+        width: 96vw;
+        max-height: 88dvh;
+    }
+    .nn-help-header { padding: 12px 14px; }
+    .nn-help-body { padding: 12px 14px; }
+    .nn-help-row { grid-template-columns: 20px 60px 1fr; }
+}

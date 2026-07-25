@@ -1,0 +1,162 @@
+// nell-nutrition/products.js
+// cal100 — ккал на 100 г (для напитков на 100 мл)
+// water100 — % воды на 100 г/мл
+// grams — порция по умолчанию, drink: true — напиток
+
+const I = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+
+export const PRODUCT_CATEGORIES = [
+    { id:'meat',    name:'Мясо и птица',    icon: I('<path d="M15.4 15.4c-2.1.6-4.3.3-5.7-1.1C7.4 12 8 7.8 10.9 4.9c2.9-2.9 7.1-3.5 9.4-1.2 1.4 1.4 1.7 3.6 1.1 5.7-1.4-.5-3.3 0-4.6 1.4-1.4 1.4-1.9 3.2-1.4 4.6z"/><path d="m11.3 15.6-2.2 2.2a2.5 2.5 0 1 1-4.5 1.7 2.5 2.5 0 1 1 1.4-4.2l2.1-2.2"/>') },
+    { id:'fish',    name:'Рыба',            icon: I('<path d="M7 12c4-6 10-6 14 0-4 6-10 6-14 0z"/><path d="M7 12 3 9v6l4-3z"/><circle cx="17" cy="11" r="0.5" fill="currentColor"/>') },
+    { id:'survival', name:'Дичь и лес',     icon: I('<path d="M12 2 3 21h18L12 2z"/><path d="M12 8l-4 9h8l-4-9z"/><path d="M12 21v-3"/>') },
+    { id:'garnish', name:'Гарниры',         icon: I('<path d="M4 12h16a8 8 0 0 1-16 0z"/><path d="M8 12c0-2 1-4 4-4s4 2 4 4"/>') },
+    { id:'soup',    name:'Супы',            icon: I('<path d="M4 13h16a8 7 0 0 1-16 0z"/><path d="M9 9V7M12 9V6M15 9V7"/>') },
+    { id:'veg',     name:'Овощи и фрукты',  icon: I('<path d="M12 20.9c1.5 0 2.8 1.1 4 1.1 3 0 6-8 6-12.2A4.9 4.9 0 0 0 17 5c-2.2 0-4 1.4-5 2-1-.6-2.8-2-5-2a4.9 4.9 0 0 0-5 4.8C2 14 5 22 8 22c1.3 0 2.5-1.1 4-1.1z"/><path d="M10 2c1 .5 2 2 2 5"/>') },
+    { id:'dairy',   name:'Молочное и яйца', icon: I('<path d="M12 22c4 0 7-3 7-8S15.5 2 12 2 5 9 5 14s3 8 7 8z"/>') },
+    { id:'bakery',  name:'Выпечка',         icon: I('<path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01M16 15.5v.01M12 12v.01M11 17v.01M7 14v.01"/>') },
+    { id:'drinks',  name:'Напитки',         icon: I('<path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/>') },
+    { id:'alco',    name:'Алкоголь',        icon: I('<path d="M8 22h8"/><path d="M12 15v7"/><path d="M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5z"/>') },
+];
+
+export const PRODUCT_DB = [
+    // ── Мясо и птица ──
+    { cat:'meat', name:'Говядина тушёная',  cal100:250, water100:2, grams:150 },
+    { cat:'meat', name:'Говядина отварная', cal100:250, water100:2, grams:150 },
+    { cat:'meat', name:'Свинина жареная',   cal100:350, water100:1, grams:150 },
+    { cat:'meat', name:'Баранина',          cal100:300, water100:1, grams:150 },
+    { cat:'meat', name:'Курица запечённая', cal100:220, water100:2, grams:150 },
+    { cat:'meat', name:'Куриная грудка',    cal100:165, water100:2, grams:150 },
+    { cat:'meat', name:'Индейка',           cal100:190, water100:2, grams:150 },
+    { cat:'meat', name:'Утка запечённая',   cal100:340, water100:1, grams:150 },
+    { cat:'meat', name:'Котлета',           cal100:260, water100:1, grams:100 },
+    { cat:'meat', name:'Шашлык',            cal100:300, water100:1, grams:200 },
+    { cat:'meat', name:'Тушёнка',           cal100:360, water100:1, grams:250 },
+    { cat:'meat', name:'Печень жареная',    cal100:210, water100:1, grams:150 },
+    { cat:'meat', name:'Колбаса',           cal100:420, water100:0, grams:70 },
+    { cat:'meat', name:'Сосиски',           cal100:290, water100:0, grams:100 },
+    { cat:'meat', name:'Бекон жареный',     cal100:500, water100:0, grams:50 },
+    { cat:'meat', name:'Ветчина',           cal100:270, water100:0, grams:70 },
+    { cat:'meat', name:'Сало',              cal100:800, water100:0, grams:30 },
+
+        // ── Выживание: дичь и подножный корм (всё приготовленное) ──
+    { cat:'survival', name:'Заяц жареный',        cal100:180, water100:2, grams:200 },
+    { cat:'survival', name:'Крольчатина тушёная', cal100:170, water100:2, grams:200 },
+    { cat:'survival', name:'Белка жареная',       cal100:150, water100:2, grams:120 },
+    { cat:'survival', name:'Оленина жареная',     cal100:160, water100:2, grams:180 },
+    { cat:'survival', name:'Кабанятина',          cal100:250, water100:1, grams:180 },
+    { cat:'survival', name:'Дичь на костре',      cal100:200, water100:2, grams:200 },
+    { cat:'survival', name:'Куропатка жареная',   cal100:180, water100:2, grams:150 },
+    { cat:'survival', name:'Утка дикая',          cal100:250, water100:1, grams:180 },
+    { cat:'survival', name:'Перепёлка',           cal100:170, water100:2, grams:100 },
+    { cat:'survival', name:'Голубь жареный',      cal100:220, water100:1, grams:120 },
+    { cat:'survival', name:'Рыба на костре',      cal100:170, water100:2, grams:180 },
+    { cat:'survival', name:'Лягушачьи лапки',     cal100:70,  water100:3, grams:100 },
+    { cat:'survival', name:'Улитки',              cal100:90,  water100:3, grams:100 },
+    { cat:'survival', name:'Печёные грибы',       cal100:60,  water100:3, grams:150 },
+    { cat:'survival', name:'Лесные ягоды',        cal100:45,  water100:5, grams:100 },
+    { cat:'survival', name:'Жёлуди печёные',      cal100:390, water100:0, grams:50 },
+    { cat:'survival', name:'Орехи лесные',        cal100:600, water100:1, grams:40 },
+    { cat:'survival', name:'Каштаны печёные',     cal100:180, water100:1, grams:80 },
+    { cat:'survival', name:'Коренья печёные',     cal100:90,  water100:3, grams:150 },
+    { cat:'survival', name:'Дикий мёд',           cal100:320, water100:0, grams:20 },
+    { cat:'survival', name:'Черемша',             cal100:35,  water100:5, grams:80 },
+    { cat:'survival', name:'Крапивный отвар',     cal100:15,  water100:8, grams:250, drink:true },
+
+    // ── Рыба ──
+    { cat:'fish', name:'Сёмга жареная',     cal100:250, water100:2, grams:150 },
+    { cat:'fish', name:'Треска отварная',   cal100:105, water100:3, grams:150 },
+    { cat:'fish', name:'Жареная рыба',      cal100:200, water100:2, grams:150 },
+    { cat:'fish', name:'Сельдь солёная',    cal100:250, water100:0, grams:100 },
+    { cat:'fish', name:'Рыбные консервы',   cal100:220, water100:1, grams:120 },
+    { cat:'fish', name:'Креветки',          cal100:95,  water100:2, grams:120 },
+    { cat:'fish', name:'Кальмары',          cal100:100, water100:2, grams:120 },
+    { cat:'fish', name:'Икра',              cal100:260, water100:0, grams:30 },
+
+    // ── Гарниры ──
+    { cat:'garnish', name:'Гречка варёная',      cal100:130, water100:2, grams:200 },
+    { cat:'garnish', name:'Рис варёный',         cal100:130, water100:2, grams:200 },
+    { cat:'garnish', name:'Перловка',            cal100:120, water100:2, grams:200 },
+    { cat:'garnish', name:'Макароны',            cal100:160, water100:1, grams:200 },
+    { cat:'garnish', name:'Картофель отварной',  cal100:85,  water100:2, grams:200 },
+    { cat:'garnish', name:'Картофель жареный',   cal100:200, water100:1, grams:200 },
+    { cat:'garnish', name:'Пюре картофельное',   cal100:110, water100:2, grams:200 },
+    { cat:'garnish', name:'Овсяная каша',        cal100:100, water100:3, grams:250 },
+    { cat:'garnish', name:'Плов',                cal100:210, water100:1, grams:250 },
+    { cat:'garnish', name:'Пельмени',            cal100:270, water100:1, grams:250 },
+    { cat:'garnish', name:'Блины',               cal100:230, water100:1, grams:150 },
+    { cat:'garnish', name:'Хлеб белый',          cal100:260, water100:0, grams:40 },
+    { cat:'garnish', name:'Хлеб ржаной',         cal100:210, water100:0, grams:40 },
+    { cat:'garnish', name:'Сухарь',              cal100:330, water100:0, grams:20 },
+    { cat:'garnish', name:'Сухари',              cal100:330, water100:0, grams:40 },
+
+    // ── Супы ──
+    { cat:'soup', name:'Борщ',           cal100:50, water100:10, grams:300 },
+    { cat:'soup', name:'Щи',             cal100:40, water100:10, grams:300 },
+    { cat:'soup', name:'Куриный суп',    cal100:45, water100:10, grams:300 },
+    { cat:'soup', name:'Грибной суп',    cal100:45, water100:10, grams:300 },
+    { cat:'soup', name:'Гороховый суп',  cal100:65, water100:9,  grams:300 },
+    { cat:'soup', name:'Уха',            cal100:50, water100:10, grams:300 },
+    { cat:'soup', name:'Бульон',         cal100:20, water100:12, grams:250 },
+
+    // ── Овощи и фрукты ──
+    { cat:'veg', name:'Яблоко',            cal100:50, water100:5, grams:150 },
+    { cat:'veg', name:'Груша',             cal100:45, water100:5, grams:150 },
+    { cat:'veg', name:'Банан',             cal100:90, water100:3, grams:120 },
+    { cat:'veg', name:'Апельсин',          cal100:45, water100:6, grams:150 },
+    { cat:'veg', name:'Виноград',          cal100:70, water100:4, grams:100 },
+    { cat:'veg', name:'Ягоды',             cal100:45, water100:4, grams:100 },
+    { cat:'veg', name:'Огурец',            cal100:15, water100:8, grams:100 },
+    { cat:'veg', name:'Помидор',           cal100:20, water100:7, grams:120 },
+    { cat:'veg', name:'Морковь',           cal100:35, water100:5, grams:100 },
+    { cat:'veg', name:'Овощной салат',     cal100:100, water100:4, grams:150 },
+    { cat:'veg', name:'Тушёные овощи',     cal100:70, water100:4, grams:200 },
+    { cat:'veg', name:'Квашеная капуста',  cal100:25, water100:5, grams:100 },
+    { cat:'veg', name:'Грибы жареные',     cal100:110, water100:2, grams:150 },
+
+    // ── Молочное и яйца ──
+    { cat:'dairy', name:'Яйцо варёное',    cal100:155, water100:1, grams:55 },
+    { cat:'dairy', name:'Яичница',         cal100:200, water100:1, grams:110 },
+    { cat:'dairy', name:'Омлет',           cal100:185, water100:2, grams:150 },
+    { cat:'dairy', name:'Творог',          cal100:160, water100:2, grams:200 },
+    { cat:'dairy', name:'Сырники',         cal100:220, water100:1, grams:150 },
+    { cat:'dairy', name:'Сыр твёрдый',     cal100:360, water100:0, grams:40 },
+    { cat:'dairy', name:'Сметана',         cal100:200, water100:2, grams:50 },
+    { cat:'dairy', name:'Йогурт',          cal100:65,  water100:3, grams:200 },
+    { cat:'dairy', name:'Каша молочная',   cal100:120, water100:3, grams:250 },
+
+    // ── Выпечка и сладкое ──
+    { cat:'bakery', name:'Пирожок',   cal100:270, water100:0, grams:90 },
+    { cat:'bakery', name:'Пирог',     cal100:300, water100:0, grams:120 },
+    { cat:'bakery', name:'Булочка',   cal100:300, water100:0, grams:80 },
+    { cat:'bakery', name:'Торт',      cal100:350, water100:0, grams:120 },
+    { cat:'bakery', name:'Печенье',   cal100:440, water100:0, grams:40 },
+    { cat:'bakery', name:'Шоколад',   cal100:545, water100:0, grams:50 },
+    { cat:'bakery', name:'Конфета',   cal100:400, water100:0, grams:15 },
+    { cat:'bakery', name:'Мёд',       cal100:320, water100:0, grams:20 },
+    { cat:'bakery', name:'Варенье',   cal100:250, water100:0, grams:30 },
+
+    // ── Напитки (порции в мл) ──
+    { cat:'drinks', name:'Вода',            cal100:0,  water100:10, grams:250, drink:true },
+    { cat:'drinks', name:'Чай',             cal100:1,  water100:6,  grams:250, drink:true },
+    { cat:'drinks', name:'Чай с сахаром',   cal100:15, water100:6,  grams:250, drink:true },
+    { cat:'drinks', name:'Кофе чёрный',     cal100:2,  water100:5,  grams:200, drink:true },
+    { cat:'drinks', name:'Кофе с молоком',  cal100:30, water100:5,  grams:200, drink:true },
+    { cat:'drinks', name:'Какао',           cal100:70, water100:5,  grams:200, drink:true },
+    { cat:'drinks', name:'Сок',             cal100:45, water100:7,  grams:250, drink:true },
+    { cat:'drinks', name:'Компот',          cal100:30, water100:7,  grams:250, drink:true },
+    { cat:'drinks', name:'Морс',            cal100:40, water100:7,  grams:250, drink:true },
+    { cat:'drinks', name:'Молоко',          cal100:60, water100:5,  grams:250, drink:true },
+    { cat:'drinks', name:'Кефир',           cal100:40, water100:6,  grams:250, drink:true },
+    { cat:'drinks', name:'Лимонад',         cal100:40, water100:5,  grams:250, drink:true },
+
+    // ── Алкоголь (порции в мл) ──
+    { cat:'alco', name:'Вино красное', cal100:85,  water100:3, grams:150, drink:true },
+    { cat:'alco', name:'Вино белое',   cal100:80,  water100:3, grams:150, drink:true },
+    { cat:'alco', name:'Шампанское',   cal100:85,  water100:3, grams:150, drink:true },
+    { cat:'alco', name:'Пиво',         cal100:45,  water100:2, grams:500, drink:true },
+    { cat:'alco', name:'Эль',          cal100:50,  water100:2, grams:500, drink:true },
+    { cat:'alco', name:'Медовуха',     cal100:70,  water100:2, grams:300, drink:true },
+    { cat:'alco', name:'Водка',        cal100:235, water100:0, grams:50,  drink:true },
+    { cat:'alco', name:'Виски',        cal100:250, water100:0, grams:50,  drink:true },
+    { cat:'alco', name:'Ром',          cal100:230, water100:0, grams:50,  drink:true },
+];
