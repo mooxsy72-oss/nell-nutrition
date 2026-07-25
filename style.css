@@ -2910,3 +2910,9 @@
         gap: 10px;
     }
 }
+@media (max-width: 768px) {
+    /* Кнопка поворота — только десктоп */
+    #nn-card.nn-compact .nn-layout-only {
+        display: none !important;
+    }
+}
