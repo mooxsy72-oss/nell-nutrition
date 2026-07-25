@@ -1843,15 +1843,18 @@ function renderCompactCharCard(data, avatarSrc, charName, isUser) {
 function renderCompactBody(body) {
     const u = state.user;
     const b = getBotState();
-    const layout = localStorage.getItem(COMPACT_LAYOUT_LS_KEY) || 'vertical';
 
-    // Синхронизируем ширину карточки под layout
+    // На мобилке всегда горизонтальная раскладка (две карточки рядом)
+    const isMobile = window.innerWidth <= 768;
+    const layout = isMobile ? 'horizontal' : (localStorage.getItem(COMPACT_LAYOUT_LS_KEY) || 'vertical');
+
     const card = document.getElementById('nn-card');
     if (card) card.classList.toggle('nn-compact-h', layout === 'horizontal');
 
     body.innerHTML = `<div class="nn-compact-wrap nn-layout-${layout}">
         ${renderCompactCharCard(u, getUserAvatar(), getUserName(), true)}
-        ${b ? renderCompactCharCard(b, getBotAvatar(), getBotName(), false) : ''}<div class="nn-cmp-footer">
+        ${b ? renderCompactCharCard(b, getBotAvatar(), getBotName(), false) : ''}
+        <div class="nn-cmp-footer">
             <span class="nn-cmp-day">📅 День ${state.dayCount || 1}</span>
             <button class="nn-cmp-expand" id="nn-cmp-expand-btn">Полный вид ↗</button>
         </div>
@@ -1865,6 +1868,7 @@ function renderCompactBody(body) {
         renderCard();
     });
 }
+
 
 
 // ─── WEIGHT TAB ───────────────────────────────────────────────
