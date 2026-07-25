@@ -2543,21 +2543,20 @@ document.getElementById('nn-dbg-reset')?.addEventListener('click', () => {
 function makeDraggable(el, handle) {
     if (!el) return;
 
-    const DRAG_EDGE = 28;
+    const DRAG_EDGE = 28; // ширина рамки (px), за которую можно тащить
     let dragging = false;
     let startX, startY, origX, origY;
 
+    // Точка рядом с краем карточки?
     function inEdge(e) {
-        // Мобилка в compact — тащим только за шапку
-        if (window.innerWidth <= 900) {
+        if (window.innerWidth <= 768) {
+            // На мобилке тащим только за шапку и только в compact-режиме
             const card = document.getElementById('nn-card');
             if (card && card.classList.contains('nn-compact')) {
-                const header = el.querySelector('.nn-header');
-                return header ? header.contains(e.target) : false;
+                return !!e.target.closest('.nn-header');
             }
             return false;
         }
-        // Десктоп — тащим за края
         const r = el.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
@@ -2565,62 +2564,40 @@ function makeDraggable(el, handle) {
             || y <= DRAG_EDGE || y >= r.height - DRAG_EDGE;
     }
 
+    // Интерактивный элемент под курсором — не тащим
     function isInteractive(e) {
         return !!e.target.closest('button, input, select, textarea, a, .nn-tab');
     }
 
-    function applyPos(clientX, clientY) {
-        let nx = origX + (clientX - startX);
-        let ny = origY + (clientY - startY);
+    // Движение во время перетаскивания (на уровне документа)
+    function onMove(e) {
+        if (!dragging) return;
+        let nx = origX + (e.clientX - startX);
+        let ny = origY + (e.clientY - startY);
         nx = Math.max(0, Math.min(window.innerWidth - 120, nx));
         ny = Math.max(0, Math.min(window.innerHeight - 60, ny));
         el.style.left = nx + 'px';
         el.style.top = ny + 'px';
-    }
-
-    //── POINTER (десктоп + современные мобильные браузеры) ──
-    function onPointerMove(e) {
-        if (!dragging) return;
-        applyPos(e.clientX, e.clientY);
         e.preventDefault();
     }
 
-    function onPointerUp(e) {
+    // Отпустили кнопку
+    function onUp() {
         if (!dragging) return;
         dragging = false;
         el.style.cursor = '';
-        el.removeEventListener('pointermove', onPointerMove);
-        el.removeEventListener('pointerup', onPointerUp);
-        el.removeEventListener('pointercancel', onPointerUp);
-        document.removeEventListener('pointermove', onPointerMove);
-        document.removeEventListener('pointerup', onPointerUp);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
         saveCardPos(el);
     }
 
-    // ── TOUCH (запасной путь для мобилок) ──
-    function onTouchMove(e) {
-        if (!dragging) return;
-        const t = e.touches[0];
-        applyPos(t.clientX, t.clientY);
-        e.preventDefault();
-    }
-
-    function onTouchEnd() {
-        if (!dragging) return;
-        dragging = false;
-        el.style.cursor = '';
-        document.removeEventListener('touchmove', onTouchMove);
-        document.removeEventListener('touchend', onTouchEnd);
-        saveCardPos(el);
-    }
-
-    // Курсор-подсказка на краях (только десктоп)
+    // Подсветка курсора при наведении на край
     el.addEventListener('pointermove', (e) => {
-        if (dragging || window.innerWidth <= 900) return;
+        if (dragging) return;
         el.style.cursor = (!isInteractive(e) && inEdge(e)) ? 'grab' : '';
     });
 
-    // Начало перетаскивания — pointer
+    // Начало перетаскивания
     el.addEventListener('pointerdown', (e) => {
         if (isInteractive(e)) return;
         if (!inEdge(e)) return;
@@ -2638,46 +2615,10 @@ function makeDraggable(el, handle) {
         startY = e.clientY;
         el.style.cursor = 'grabbing';
 
-        // Слушаем и на элементе (для захваченных событий),
-        // и на document (для событий за пределами элемента)
-        el.addEventListener('pointermove', onPointerMove);
-        el.addEventListener('pointerup', onPointerUp);
-        el.addEventListener('pointercancel', onPointerUp);
-        document.addEventListener('pointermove', onPointerMove);
-        document.addEventListener('pointerup', onPointerUp);
-
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
         e.preventDefault();
     });
-
-    // Начало перетаскивания — touch (запасной путь)
-    el.addEventListener('touchstart', (e) => {
-        // Только шапка на мобилке в compact
-        const card = document.getElementById('nn-card');
-        if (window.innerWidth > 900) return;
-        if (!card || !card.classList.contains('nn-compact')) return;
-
-        const header = el.querySelector('.nn-header');
-        if (!header || !header.contains(e.target)) return;
-        if (isInteractive(e)) return;
-
-        const t = e.touches[0];
-        dragging = true;
-        const r = el.getBoundingClientRect();
-        el.style.transform = 'none';
-        el.style.left = r.left + 'px';
-        el.style.top = r.top + 'px';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
-        origX = r.left;
-        origY = r.top;
-        startX = t.clientX;
-        startY = t.clientY;
-
-        document.addEventListener('touchmove', onTouchMove, { passive: false });
-        document.addEventListener('touchend', onTouchEnd);
-
-        e.preventDefault();
-    }, { passive: false });
 }
 
 
