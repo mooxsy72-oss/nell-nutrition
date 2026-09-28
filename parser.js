@@ -310,6 +310,21 @@ const KNOWN_KEYS = ['tp', 'date', 'time', 'user_preg', 'bot_preg', 'activity', '
     'user_feel', 'bot_feel', 'user_profile', 'bot_profile', 'user_state', 'bot_state', 'sleep', 'offscreen', 'ate', 'drank',
     'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care'];
 
+/**
+ * Содержимое тега из текста. loose=true — для ответа фонового запроса:
+ * модели заворачивают тег в ```, теряют «-->» или пишут голое «NN: …».
+ */
+export function findNnInner(text, { loose = false } = {}) {
+    const strict = findTagInner(text);
+    if (strict != null || !loose) return strict;
+    const cleaned = String(text ?? '').replace(/```[a-z]*|```/gi, '');
+    const open = cleaned.match(/<!--\s*NN\b[\s:]*([\s\S]*?)(?:-->|$)/i);
+    if (open && open[1].trim()) return open[1];
+    const bare = cleaned.match(/^\s*NN\b[\s:]+(.+)$/im);
+    if (bare && bare[1].trim()) return bare[1];
+    return null;
+}
+
 function findTagInner(text) {
     for (const re of TAG_RES) {
         re.lastIndex = 0;
@@ -352,9 +367,16 @@ export function parseNnTag(text) {
     if (!text) return null;
     const inner = findTagInner(text);
     if (inner == null) return null;
+    return parseNnInner(inner);
+}
+
+/** Разбор уже извлечённого содержимого тега (из текста или из message.extra) */
+export function parseNnInner(inner) {
+    if (inner == null) return null;
     const f = splitFields(inner);
 
     const result = {
+        inner: String(inner),
         tp: f.tp != null ? parseHours(f.tp) : null,
         activity: null,
         userActivity: null,

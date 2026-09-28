@@ -833,28 +833,30 @@ function evaluateEffects(c, hours, added, removed) {
     }
     c.buffs = c.buffs.filter(b => b.id !== 'balanced');
 
-    // Голод и тело
-    T('hunger', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 6, off: c.satiety > 35, linger: 0.5 });
-    T('dehydration', { on: c.water <= 25, off: c.water > 35, linger: 1 });
+    // Эффекты от показателей снимаются сразу, как только показатель восстановился
+    // (небольшой зазор между «включить» и «выключить» — чтобы не мигали)
+    T('hunger', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 4, off: c.satiety > 25 });
+    T('dehydration', { on: c.water <= 25, off: c.water > 30 });
     T('irritability', { on: c.satiety <= 30 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
-        off: c.satiety > 45, linger: 1 });
-    T('overeating', { on: (c.recentIntake || 0) > g * 0.6, off: (c.recentIntake || 0) < g * 0.35, linger: 1.5 });
+        off: c.satiety > 35 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });
+    T('overeating', { on: (c.recentIntake || 0) > g * 0.6, off: (c.recentIntake || 0) < g * 0.45 });
     const starving = c.diseases.some(d => d.id === 'starvation');
+    // Замедленный обмен — приспособление тела, проходит не сразу, а через сутки нормального питания
     T('slow_metabolism', { on: (c.daysWithDeficit || 0) >= 3 || starving, off: (c.daysWithDeficit || 0) === 0 && !starving, linger: 24 });
 
     // Сон и силы
     const caffeinated = (c.caffeine || 0) >= 60;
-    T('exhaustion', { on: c.energy <= 15, off: c.energy > 30, linger: 4 });
-    T('drowsiness', { on: c.energy <= 30 && c.energy > 15 && !caffeinated, off: c.energy > 40 || c.energy <= 15 || caffeinated, linger: 1 });
-    T('sleep_deprived', { on: (c.hoursAwake || 0) >= 20, off: (c.hoursAwake || 0) < 4, linger: 0 });
+    T('exhaustion', { on: c.energy <= 15, off: c.energy > 20 });
+    T('drowsiness', { on: c.energy <= 30 && c.energy > 15 && !caffeinated, off: c.energy > 35 || c.energy <= 15 || caffeinated });
+    T('sleep_deprived', { on: (c.hoursAwake || 0) >= 20, off: (c.hoursAwake || 0) < 4 });
 
     // Кофеин
-    T('caffeine', { on: caffeinated, off: (c.caffeine || 0) < 40, linger: 0 });
-    T('caffeine_jitters', { on: (c.caffeine || 0) >= 400, off: (c.caffeine || 0) < 250, linger: 0 });
+    T('caffeine', { on: caffeinated, off: (c.caffeine || 0) < 50 });
+    T('caffeine_jitters', { on: (c.caffeine || 0) >= 400, off: (c.caffeine || 0) < 350 });
 
     // Алкоголь: уровень опьянения меняется вместе с промилле
     const bac = c.bac || 0;
-    T('intoxication', { on: bac >= 0.3, off: bac < 0.2, linger: 0 });
+    T('intoxication', { on: bac >= 0.3, off: bac < 0.25 });
     const intox = c.debuffs.find(d => d.id === 'intoxication');
     if (intox) {
         const lv = EFFECT_INFO.intoxication.levels;
@@ -869,10 +871,10 @@ function evaluateEffects(c, hours, added, removed) {
         c.bacPeak = 0;
     }
 
-    // Положительные
-    T('well_fed', { on: c.satiety >= 75 && (c.reserve || 0) >= g * 0.45, off: c.satiety < 60, linger: 2 });
-    T('hydrated', { on: c.water >= 80, off: c.water < 65, linger: 2 });
-    T('high_energy', { on: c.energy >= 85, off: c.energy < 70, linger: 2 });
+    // Положительные — тоже сразу, по показателям
+    T('well_fed', { on: c.satiety >= 75 && (c.reserve || 0) >= g * 0.45, off: c.satiety < 70 });
+    T('hydrated', { on: c.water >= 80, off: c.water < 75 });
+    T('high_energy', { on: c.energy >= 85, off: c.energy < 80 });
 
     // Беременность: со второго триместра голод просыпается раньше
     const pw = c.pregnant ? (c.pregnancyWeek || 0) : 0;
@@ -889,8 +891,12 @@ function evaluateEffects(c, hours, added, removed) {
 // СОБЫТИЯ БЕРЕМЕННОСТИ — срабатывают сами, без участия пользователя
 // Случайность привязана к дню и ходу, поэтому свайп даёт тот же результат.
 // ═══════════════════════════════════════════════════════════════
-const CRAVINGS = ['солёные огурцы', 'что-то сладкое', 'что-то кислое', 'мясо', 'свежие фрукты', 'квашеная капуста',
-    'холодное молоко', 'сыр', 'мёд', 'что-то острое', 'жареная картошка', 'ягоды'];
+// ru — для инфоблока, en — для промпта (весь инджект на английском)
+const CRAVINGS = [
+    ['солёные огурцы', 'pickles'], ['что-то сладкое', 'something sweet'], ['что-то кислое', 'something sour'],
+    ['мясо', 'meat'], ['свежие фрукты', 'fresh fruit'], ['квашеная капуста', 'sauerkraut'], ['холодное молоко', 'cold milk'],
+    ['сыр', 'cheese'], ['мёд', 'honey'], ['что-то острое', 'something spicy'], ['жареная картошка', 'fried potatoes'], ['ягоды', 'berries'],
+];
 
 /**
  * @param {{ woke?: boolean, hour?: number, day?: number, turn?: number, mealKcal?: number, activity?: string, sleeping?: boolean }} ev
@@ -919,8 +925,10 @@ export function pregnancyEvents(c, ev, added = []) {
     if (w >= 8 && w <= 34 && !ev.sleeping && c.cravingDay !== ev.day && ev.hour >= 10) {
         c.cravingDay = ev.day;
         if (seededChance(`${key}|crave`) < 0.4) {
-            const item = CRAVINGS[Math.floor(seededChance(`${key}|what`) * CRAVINGS.length)];
-            grantEffect(c, 'craving', 4, added, item);
+            const [ru, en] = CRAVINGS[Math.floor(seededChance(`${key}|what`) * CRAVINGS.length)];
+            grantEffect(c, 'craving', 4, added, ru);
+            const e = [...c.buffs, ...c.debuffs].find(x => x.id === 'craving');
+            if (e) e.detailEn = en;
         }
     }
     // Изжога: третий триместр, после плотной еды, в половине случаев
@@ -938,7 +946,7 @@ export function pregnancyEvents(c, ev, added = []) {
 // БОЛЕЗНИ-СОБЫТИЯ — случаются сами, шанс зависит от иммунитета и еды
 // ═══════════════════════════════════════════════════════════════
 /**
- * @param {{ day:number, turn:number, foods?: Array<{item:string, risky?:boolean}>, drinks?: Array<{item:string, risky?:boolean}>, hard?: boolean }} ev
+ * @param {{ day:number, turn:number, foods?: Array<{item:string, risky?:boolean}>, drinks?: Array<{item:string, risky?:boolean}>, hard?: boolean, skip?: boolean }} ev
  * @returns {{ vomited: boolean }}
  */
 export function illnessEvents(c, ev, added = []) {
@@ -953,6 +961,12 @@ export function illnessEvents(c, ev, added = []) {
     const hist = isHistorical();
     const infMult = hist ? 2 : 1;   // без современной медицины и гигиены инфекции чаще
 
+    // Лёгкий режим: пропуск времени — это «жили обычной жизнью», новые болезни
+    // за кадром не начинаются (уже начатые идут своим ходом и проходят)
+    if (ev.skip && !ev.hard) {
+        c.illRollDay = ev.day;
+        return out;
+    }
     // Раз в игровой день (за каждый прошедший день, максимум 30)
     const from = Math.max((c.illRollDay ?? ev.day - 1) + 1, ev.day - 30);
     for (let d = from; d <= ev.day; d++) {
@@ -1089,17 +1103,28 @@ export function updateFocus(charData, turn, changed = new Set(), opts = {}) {
         candidates.push({ id: d.id, every: info.every, rank: lv?.kind === 'negative' ? 3 : 1 });
     }
 
+    const critical = new Set(charData.diseases.filter(d => d.severity === 'critical' && !d.recovering).map(d => d.id));
     const due = candidates.filter(c => {
         const last = charData.salience[c.id];
+        // Два ответа подряд об одном и том же — только если стало критично
+        if (last !== undefined && turn - last < 2 && !critical.has(c.id)) return false;
         return c.force || changed.has(c.id) || last === undefined || turn - last >= c.every;
     }).sort((a, b) => ((changed.has(b.id) || b.force) - (changed.has(a.id) || a.force)) || (b.rank - a.rank));
 
     const focus = due.slice(0, MAX_FOCUS).map(c => c.id);
     charData.focusCue = {};
+    charData.lastCue = charData.lastCue || {};
+    charData.prevCue = {};
     for (const id of focus) {
         charData.salience[id] = turn;
         const pool = cuesFor(charData, id);
-        if (pool?.length) charData.focusCue[id] = pool[(turn + hashStr(charData.name || '') + hashStr(id)) % pool.length];
+        if (!pool?.length) continue;
+        // Подсказка каждый раз новая: не та, что была в прошлый раз
+        let idx = (turn + hashStr(charData.name || '') + hashStr(id)) % pool.length;
+        if (pool.length > 1 && pool[idx] === charData.lastCue[id]) idx = (idx + 1) % pool.length;
+        if (charData.lastCue[id]) charData.prevCue[id] = charData.lastCue[id];
+        charData.focusCue[id] = pool[idx];
+        charData.lastCue[id] = pool[idx];
     }
     const present = new Set(candidates.map(c => c.id));
     for (const id of Object.keys(charData.salience)) if (!present.has(id)) delete charData.salience[id];
@@ -1111,7 +1136,8 @@ export function updateFocus(charData, turn, changed = new Set(), opts = {}) {
 // ═══════════════════════════════════════════════════════════════
 function effectPrompt(e) {
     const lv = effectLevel(e);
-    return lv?.prompt || EFFECT_INFO[e.id]?.prompt || e.id;
+    const base = lv?.prompt || EFFECT_INFO[e.id]?.prompt || e.id;
+    return e.detailEn ? `${base}: ${e.detailEn}` : base;
 }
 
 function edPrompt(e) {
@@ -1126,7 +1152,13 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
     const focus = new Set(charData.focus || []);
     const surface = [];
     const background = [];
-    const cue = (id) => charData.focusCue?.[id] ? ` Possible detail this time: ${charData.focusCue[id]}.` : '';
+    const cue = (id) => {
+        let t = charData.focusCue?.[id] ? ` Possible detail this time: ${charData.focusCue[id]}.` : '';
+        if (charData.prevCue?.[id]) t += ` Already shown before (${charData.prevCue[id]}) — do not repeat that; show a different aspect.`;
+        return t;
+    };
+    // Для персонажа игрока — только непроизвольная реакция тела, без мыслей и чувств
+    const bodyNote = opts.isUser ? ` (${charName}: show it only as an involuntary bodily reaction, never as thoughts or feelings)` : '';
 
     for (const d of charData.diseases) {
         const def = DISEASE_DB[d.id];
@@ -1159,7 +1191,7 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
 
     const out = [];
     if (surface.length) {
-        out.push(`  Surface in this reply (one brief, concrete detail each, woven into action or dialogue — the suggested detail is optional, pick your own if it fits better):`);
+        out.push(`  Surface in this reply${bodyNote} (one brief, concrete detail each, woven into action or dialogue — the suggested detail is optional, pick your own if it fits better):`);
         for (const l of surface) out.push(`    • ${l}`);
     }
     if (background.length) {

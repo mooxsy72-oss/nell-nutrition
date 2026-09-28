@@ -687,3 +687,7 @@
     .nn-pane { padding: 8px; }
     .nn-card { padding: 8px; }
 }
+
+/* ─── Кнопка «свернуть» в строке вкладок ─────────────────── */
+.nn-ib .nn-tab.nn-collapse { margin-left: auto; padding-left: 12px; padding-right: 12px; }
+.nn-ib .nn-tab.nn-collapse i { margin: 0; }

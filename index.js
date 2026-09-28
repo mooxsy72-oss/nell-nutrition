@@ -13,7 +13,7 @@ import {
     tickTime, applyMeal, applyDrink, applyVomit, goalOf, reserveCap, changeWeight, KCAL_PER_KG,
     SCENE_ACTIVITY, bmrOf, burnPerHour,
 } from './nutrition-engine.js';
-import { parseNnTag, foodFlags } from './parser.js';
+import { parseNnTag, parseNnInner, findNnInner, foodFlags } from './parser.js';
 import {
     notify, queueNotify, flushQueue, setSilent, setToastsEnabled, clearQueue,
 } from './notifications.js';
@@ -31,7 +31,8 @@ import { PRODUCT_DB, PRODUCT_CATEGORIES } from './products.js';
 // НАСТРОЙКИ (localStorage — общие для всех чатов)
 // ═══════════════════════════════════════════════════════════════
 const META_KEY = 'nellNutritionState';
-const PROMPT_KEY = 'nell_nutrition_state';
+const PROMPT_KEY = 'nell_nutrition_state';      // состояние персонажей — поглубже в контексте
+const PROMPT_KEY_TAG = 'nell_nutrition_tag';    // правило тега — в самом конце промпта
 const LS = {
     enabled: 'nellNutrition_enabled',
     toasts: 'nellNutrition_toasts',
@@ -149,6 +150,7 @@ function defaultState() {
         snapshots: [],          // { beforeMsg, ... } — состояние ДО обработки ответа
         manualLog: [],          // ручное кормление, привязанное к ответу
         rpDate: null,           // дата/время из ролплея (тег date=)
+        missedTag: 0,           // сколько ответов подряд пришло без тега (для «догоняющего» тега)
         calibrate: { pending: true, doneAt: null },   // уточнить профиль по карточкам в следующем ответе
         version: 3,
     };
@@ -264,6 +266,7 @@ function takeSnapshot(beforeMsg) {
         turn: state.turn,
         lastGameTime: state.lastGameTime,
         rpDate: state.rpDate,
+        missedTag: state.missedTag || 0,
         weightHistory: clone(state.weightHistory),
         history: clone(state.history),
     });
@@ -287,6 +290,7 @@ function restoreSnapshot(snap) {
     state.turn = snap.turn;
     state.lastGameTime = snap.lastGameTime;
     state.rpDate = snap.rpDate ?? null;
+    state.missedTag = snap.missedTag || 0;
     state.weightHistory = clone(snap.weightHistory || []);
     state.history = clone(snap.history || []);
 }
@@ -369,7 +373,7 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                     const crossed = h0 < mh ? h0 + step >= mh : h0 + step - 24 >= mh;
                     if (!crossed || asleep) continue;
                     applyMeal(c, dayTarget * share, 8, g);
-                    if (!isHard()) c.producedToday = true;   // в лёгком режиме за кадром питаются разнообразно
+                    c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
                 }
                 // Сытый организм добирает нехватку из жира, а не проваливается в гипогликемию
                 const floor = g * (asleep ? 0.25 : 0.4);
@@ -379,7 +383,8 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                 }
             }
             if (routine && drinkOf[ch.who] && !asleep) {
-                applyDrink(c, 3.5 * SCENE_ACTIVITY[activityOf[ch.who]].strain * step, 0, g);
+                // Пьют по жажде: чем меньше воды, тем больше пьют — вода держится около 75–80%
+                applyDrink(c, Math.max(0, 82 - c.water) * Math.min(1, 0.6 * step), 0, g);
             }
         }
 
@@ -527,13 +532,39 @@ function processAiResponse(messageId) {
 
     setSilent(true);
     clearQueue();
-    const text = msg.mes;
-    const tag = parseNnTag(text);
+    let text = msg.mes;
+    // 1) обычный тег-комментарий; 2) сохранённый для этого же текста;
+    // 3) тег «не по форме» (строкой, в ```-блоке, без -->) — читаем и вырезаем из видимого текста
+    let tag = parseNnTag(text);
+    if (!tag && msg.extra?.nn_tag?.inner && msg.extra.nn_tag.mesHash === hashText(text)) {
+        tag = parseNnInner(msg.extra.nn_tag.inner);
+    }
+    if (!tag) {
+        const inner = findNnInner(text, { loose: true });
+        if (inner != null) tag = parseNnInner(inner);
+    }
+    if (tag) {
+        // Видимые формы тега убираем из текста; правильный скрытый комментарий остаётся как образец формата
+        const cleaned = stripLooseTag(text);
+        if (cleaned !== text && cleaned.trim()) {
+            msg.mes = cleaned;
+            text = cleaned;
+            if (Array.isArray(msg.swipes) && msg.swipe_id != null) msg.swipes[msg.swipe_id] = cleaned;
+            try { stModule?.updateMessageBlock?.(N, msg); } catch (e) { /* пусто */ }
+        }
+    }
+    if (tag) {
+        msg.extra = msg.extra || {};
+        msg.extra.nn_tag = { inner: tag.inner, mesHash: hashText(text) };
+    }
+    const tagRecovered = false;
     const ctx = newCtx();
 
     // ── Время: tp и time из тега; без тега — условные полчаса ──
     const bot = getBotState();
-    let hours = tag ? (tag.tp ?? (tag.clock != null ? null : 0)) : 0.5;
+    // Без тега время не угадываем: следующий ответ получит «догоняющую» приписку и покроет этот ход
+    let hours = tag ? (tag.tp ?? (tag.clock != null ? null : 0)) : 0;
+    state.missedTag = tag ? 0 : (state.missedTag || 0) + 1;
     hours = tag ? alignClock(tag.clock, hours) : hours;
     hours = Math.max(0, Math.min(720, hours || 0));
     if (tag?.date) state.rpDate = tag.date;
@@ -547,7 +578,7 @@ function processAiResponse(messageId) {
     const sleeping = !!tag?.sleeping;
 
     // ── Еда — только из тега ──
-    const source = tag ? 'tag' : 'none';
+    const source = tag ? (tagRecovered ? 'recovered' : 'tag') : 'none';
     const userFood = tag ? (tag.userAte.length ? tag.userAte : tag.ate) : [];
     const userDrink = tag ? (tag.userDrank.length ? tag.userDrank : tag.drank) : [];
     const botFood = tag && bot ? tag.botAte : [];
@@ -627,7 +658,10 @@ function processAiResponse(messageId) {
     setEra(isHistorical() ? 'historical' : 'modern');
     for (const ch of chars) {
         const added = [];
-        const r = illnessEvents(ch.data, { day: dayNumber(), turn: state.turn, foods: foodsOf[ch.who], drinks: drinksOf[ch.who], hard: isHard() }, added);
+        const r = illnessEvents(ch.data, {
+            day: dayNumber(), turn: state.turn, foods: foodsOf[ch.who], drinks: drinksOf[ch.who],
+            hard: isHard(), skip: hours >= 12,
+        }, added);
         added.forEach(id => ctx[ch.who].added.add(id));
         if (r.vomited) applyVomit(ch.data);
     }
@@ -841,71 +875,122 @@ function charPromptBlock(c, name, isUser) {
     return lines.join('\n');
 }
 
-function buildSystemPrompt() {
+// ─── 1. Состояние персонажей (глубина 4): что сейчас с телами ───
+function buildStatePrompt() {
     if (!state) return '';
     const u = state.user, b = getBotState();
-    const userName = getUserName(), botName = getBotName();
-
-    const anySurface = (u.focus?.length || 0) + (b?.focus?.length || 0) > 0;
+    const userName = getUserName();
     const blocks = [charPromptBlock(u, userName, true)];
-    if (b) blocks.push(charPromptBlock(b, botName, false));
+    if (b) blocks.push(charPromptBlock(b, getBotName(), false));
+    const anySurface = (u.focus?.length || 0) + (b?.focus?.length || 0) > 0;
     const anyEd = edList(u).length || (b && edList(b).length);
-    const timeLine = (state.rpDate ? `Current in-world date/time: ${state.rpDate}.\n` : '')
-        + (isHistorical() ? `Setting: a pre-modern era with no modern medicine — illness is treated with herbs, rest, warmth and folk remedies; infections, bad water and spoiled food are real dangers and sickness takes longer to pass.\n` : '');
 
-    return `[Nutrition tracker — hidden physiological state. It is background context for the story, not its topic.]
-${timeLine}
+    const head = ['[Physiology tracker — hidden background state of the characters. It is context for the story, not its topic.]'];
+    if (state.rpDate) head.push(`Current in-world date/time: ${state.rpDate}.`);
+    if (isHistorical()) head.push('Setting: a pre-modern era with no modern medicine — illness is treated with herbs, rest, warmth and folk remedies; infections, bad water and spoiled food are real dangers, and sickness takes longer to pass.');
+
+    return `${head.join('\n')}
+
 ${blocks.join('\n\n')}
 
-How to use this:
-- ${anySurface ? 'Mention a physical state only where it is listed under "Surface in this reply".' : 'Nothing needs to surface in this reply.'} Anything under "Background only" stays unspoken unless the scene itself turns to food, drink, rest or hard physical effort.
-- When something surfaces, one short concrete detail inside the action or dialogue is enough — never a paragraph, never the opening or closing line.
-- Don't reuse a symptom, image or wording you already used in recent replies. Vary it or leave it out.
-- For ${userName}: show only outward signs; never decide their feelings, thoughts or actions.
-- Weakness still limits what bodies can actually do, even when it is not narrated.
-- Mental conditions show through behaviour, choices and dialogue — not through narrated diagnoses.${anyEd ? `\n- ${ED_GUIDANCE}` : ''}
-
-REQUIRED hidden tag — the very last line of every reply:
-<!-- NN date=… | time=ЧЧ:ММ | tp=… | activity=… | user_ate=… | user_drank=… | bot_ate=… | bot_drank=… | user_feel=… | bot_feel=… -->
-
-Food and drink — check BOTH sources every time:
- 1) ${userName}'s last message: whatever they wrote that the characters ate or drank already happened in the story and must be recorded;
- 2) your own reply.
-Record each thing once; skip only what an earlier tag already recorded.
-- "мы поели", "наелись", "пообедали", "we ate" = both ${userName} and ${botName} ate → put it in user_ate AND bot_ate.
-- Always give a number for the real amount: a bite ≈ 50 kcal, a snack ≈ 150–250, a normal plate ≈ 400–700, "наелись", "до отвала" or a feast ≈ 800–1200 per person. Format название:ККАЛ, comma-separated.
-- Drinks as название:МЛ — a sip ≈ 30мл, a cup ≈ 200–250мл, a big mug ≈ 400мл.
-- Not food that was only cooked, served, offered, bought or talked about. Other NPCs are not tracked.
-Other fields:
-- date: in-world date and time of day as the story implies, short, in the story's language (e.g. "3 мая, утро"); if the date is unknown, just the time of day.
-- time: your best estimate of the in-world clock at the end of this reply, 24h (e.g. 07:30, 19:00).
-- tp: in-world hours since the previous reply (a few minutes = 0.2, an hour = 1, a night = 8, two days = 48).
-- activity: what the bodies mostly did — low (sitting, talking, resting), medium (walking, chores, cooking, handiwork), high (running, fighting, heavy labour). If they differ, use user_activity=… and bot_activity=… instead.
-- sleeping=true only if they slept; user_vomited=true / bot_vomited=true only if someone actually threw up.
-- user_feel / bot_feel: 3–8 words in the story's language — how that character feels in body and mind right now.
-- user_care=true / bot_care=true: only if a sick or weakened character was actually cared for in this reply — ${isHistorical() ? 'a healer or herbalist, herbal brews, a bathhouse, warmth, broth and rest' : 'a doctor, medicine, warmth and rest'}.
-- user_preg=WEEK / bot_preg=WEEK: only when the story establishes a pregnancy or reveals its week (conception, a healer, a test); 0 if it ended. After that the week advances by itself — don't repeat it.
-- Leave out empty food and drink fields.
-${isHard()
-        ? `- SURVIVAL MODE: food is a limited resource. For any time skip, add offscreen=fed only if the characters actually had food during it, otherwise offscreen=hungry; offscreen=thirsty if they had neither food nor water. Don't invent meals the story didn't provide. Hunger can become dangerous.`
-        : `- Time skips: characters live a normal routine off-screen — sleep at night, regular meals — this is counted automatically, don't list those meals. Add offscreen=hungry only if the story makes clear they truly had nothing to eat (offscreen=thirsty if no water either).`}
-Examples:
-<!-- NN date=весна, полдень | time=12:30 | tp=1.5 | activity=medium | user_ate=блины со сметаной:900 | bot_ate=блины со сметаной:1100 | user_drank=молоко:250мл | user_feel=сытая, довольная, чуть обиженная | bot_feel=сытый, собран перед охотой -->
-<!-- NN date=3 мая, вечер | time=19:10 | tp=0.2 | activity=low | user_feel=спокойна, клонит в сон | bot_feel=бодр, насторожен -->${calibrateNow ? `
-
-ONE-TIME CALIBRATION (this reply only): also add these fields to the tag, using ${botName}'s character card, ${userName}'s persona description and everything in the story so far. Give your best estimate for anything not stated:
-user_profile=GENDER/AGE/HEIGHT_CM/WEIGHT_KG/BUILD/LIFESTYLE/ED/PREG_WEEK | bot_profile=… | user_state=SATIETY/WATER/ENERGY | bot_state=…
-GENDER m or f; BUILD slim|average|athletic|muscular|heavy; LIFESTYLE sedentary|light|moderate|active|very_active; ED none, or anorexia|bulimia|binge with :mild|:moderate|:severe — only if the card or story clearly establishes it; PREG_WEEK is the pregnancy week, 0 if not pregnant. SATIETY, WATER, ENERGY are 0–100 for how the character is right now in the story.
-Example: user_profile=f/24/165/57/slim/light/none/0 | bot_profile=m/30/185/82/muscular/active/none/0 | user_state=70/60/80 | bot_state=85/70/65` : ''}`;
+Rules for using this:
+- ${anySurface ? 'Show a physical or mental state only where it is listed under "Surface in this reply".' : 'Nothing needs to surface in this reply.'} "Background only" items stay unspoken unless the scene itself turns to food, drink, rest or hard physical effort.
+- A surfaced state gets ONE short concrete detail woven into action or dialogue — never a paragraph, never the opening or closing line of the reply.
+- Never bring the same condition up in two replies in a row unless it just got worse. Never reuse an image, gesture or phrase you already used for it earlier in the chat; if nothing fresh fits, leave it out.
+- ${userName} is the player's character. Never write ${userName}'s thoughts, feelings, decisions or words. But ${userName}'s BODY still reacts on its own: when a state of ${userName} surfaces, show it as an involuntary physical reaction the scene can see — a wave of nausea that stops them mid-step, pallor, trembling hands, legs giving way, a cough, a flinch of pain. The body reacts; the mind stays the player's.
+- Weakness limits what bodies can actually do, even when it is not narrated.
+- Mental conditions show through behaviour, choices and dialogue of the characters you voice — never as a narrated diagnosis.${anyEd ? `\n- ${ED_GUIDANCE}` : ''}`;
 }
+
+// ─── 2. Правило тега (глубина 0 — самый конец промпта, там модели слушаются лучше) ───
+function tagFieldRules(userName, botName) {
+    return [
+        `- time (in-world 24h clock at the end of the reply) and tp (in-world hours since the previous reply: a few minutes 0.2, an hour 1, a night 8, two days 48) — ALWAYS.`,
+        `- activity: low (sitting, talking, resting) | medium (walking, chores, cooking, handiwork) | high (running, fighting, heavy labour). If ${userName} and ${botName} did different things, write user_activity= and bot_activity= instead.`,
+        `- Eating and drinking: check ${userName}'s last message AND the reply. Everything eaten or drunk in either goes in, once. "We ate / we both had" = both ate → user_ate AND bot_ate. Always a kcal number for the real portion: a bite 50, a snack 150–250, a plate 400–700, "stuffed" or a feast 800–1200 each. Drinks in ml: a sip 30, a cup 250, a mug 400. Not food that was only cooked, served, offered or talked about. Other NPCs are not tracked.`,
+        `- date: the in-world date and part of day, short. user_feel / bot_feel: 3–8 words, how that character feels in body and mind right now.`,
+        `- Only when true: sleeping=true (they slept) · user_vomited=true / bot_vomited=true · user_care=true / bot_care=true (a sick character was treated or cared for: ${isHistorical() ? 'a healer, herbs, a bathhouse, warmth, broth, rest' : 'a doctor, medicine, warmth, rest'}) · user_preg=WEEK / bot_preg=WEEK (a pregnancy is newly established or its week revealed; 0 if it ended).`,
+        isHard()
+            ? `- SURVIVAL MODE: for any time skip, add offscreen=fed only if they actually had food during it; otherwise offscreen=hungry, or offscreen=thirsty if they had neither food nor water. Never invent meals the story didn't provide.`
+            : `- Time skips: off-screen sleep and regular meals are counted automatically — don't list them. Add offscreen=hungry only if the story makes clear they truly had nothing to eat (offscreen=thirsty if no water either).`,
+        `- Omit empty fields. Write FOOD, DRINK, DATE and FEEL in the language the roleplay is written in.`,
+    ].join('\n');
+}
+
+function calibrationRules(userName, botName) {
+    return `Also add: user_profile=GENDER/AGE/HEIGHT_CM/WEIGHT_KG/BUILD/LIFESTYLE/ED/PREG_WEEK | bot_profile=… | user_state=SATIETY/WATER/ENERGY | bot_state=…
+Use ${botName}'s character card, ${userName}'s persona description and the story so far; give your best estimate for anything not stated.
+GENDER m or f · BUILD slim|average|athletic|muscular|heavy · LIFESTYLE sedentary|light|moderate|active|very_active · ED none, or anorexia|bulimia|binge with :mild|:moderate|:severe, only if clearly established · PREG_WEEK the pregnancy week, 0 if not pregnant · SATIETY, WATER, ENERGY 0–100, how they are right now.
+Example shape: user_profile=f/24/165/57/slim/light/none/0 | bot_profile=m/30/185/82/muscular/active/none/0 | user_state=70/60/80 | bot_state=85/70/65`;
+}
+
+const TAG_TEMPLATE = '<!-- NN time=HH:MM | tp=HOURS | activity=LEVEL | user_ate=FOOD:KCAL, FOOD:KCAL | user_drank=DRINK:ML | bot_ate=FOOD:KCAL | bot_drank=DRINK:ML | date=DATE | user_feel=FEEL | bot_feel=FEEL -->';
+
+function buildTagPrompt() {
+    if (!state) return '';
+    const userName = getUserName(), botName = getBotName();
+    return `[Nutrition tag — REQUIRED in every reply]
+End the reply with exactly one hidden HTML comment on its own last line, after all story text:
+${TAG_TEMPLATE}
+CAPITALS are placeholders — fill them from the current scene, copy nothing literally.
+${tagFieldRules(userName, botName)}${catchUpLine()}${calibrateNow ? `\nONE-TIME CALIBRATION (this reply only). ${calibrationRules(userName, botName)}` : ''}
+Never skip, mention or explain the comment.`;
+}
+
+// Прошлый ответ пришёл без тега — этот тег должен покрыть и его
+function catchUpLine() {
+    const n = state?.missedTag || 0;
+    if (!n) return '';
+    return `\n- CATCH-UP: your previous ${n > 1 ? `${n} replies` : 'reply'} had no tag. This tag must cover everything since the last tagged reply: tp = in-world hours since then, and all eating and drinking in those replies and in ${getUserName()}'s messages in between.`;
+}
+
+// Модуль таверны целиком — для main_api и updateMessageBlock (динамически, чтобы не падать на старых версиях)
+let stModule = null;
+import('../../../../script.js').then(m => { stModule = m; }).catch(() => {});
+const isChatCompletion = () => stModule?.main_api === 'openai';
 
 // Калибровка по карточкам: включается на первый ответ в новом чате и по кнопке,
 // держится на время свайпов этого же ответа, потом промпт возвращается к обычному
 let calibrateNow = false;
 
 function injectPrompt() {
-    const prompt = (isEnabled() && state) ? buildSystemPrompt() : '';
-    setExtensionPrompt(PROMPT_KEY, prompt, extension_prompt_types.IN_CHAT, 2, true, extension_prompt_roles.SYSTEM);
+    const on = isEnabled() && state;
+    setExtensionPrompt(PROMPT_KEY, on ? buildStatePrompt() : '', extension_prompt_types.IN_CHAT, 4, true, extension_prompt_roles.SYSTEM);
+    // Для chat completion правило тега ставится в самый конец готового промпта (onPromptReady),
+    // для остальных API — обычным инджектом на глубине 0
+    setExtensionPrompt(PROMPT_KEY_TAG, on && !isChatCompletion() ? buildTagPrompt() : '', extension_prompt_types.IN_CHAT, 0, true, extension_prompt_roles.SYSTEM);
+}
+
+/**
+ * Chat completion: правило тега — последним системным сообщением, уже после
+ * всех инструкций пресета (пост-история, джейлбрейк). Если в конце стоит
+ * префилл ассистента — ставим перед ним.
+ */
+function onPromptReady(eventData) {
+    if (!isEnabled() || !state || !eventData || eventData.dryRun) return;
+    const list = eventData.chat;
+    if (!Array.isArray(list)) return;
+    const text = buildTagPrompt();
+    if (!text) return;
+    let at = list.length;
+    while (at > 0 && list[at - 1]?.role === 'assistant') at--;
+    list.splice(at, 0, { role: 'system', content: text });
+}
+
+// Вырезает тег, написанный не комментарием: ```-блок, незакрытый <!-- NN, голая строка «NN: …»
+function stripLooseTag(text) {
+    let t = String(text || '');
+    t = t.replace(/```[a-z]*\s*(?:<!--\s*)?NN\b[\s\S]*?```/gi, '');
+    t = t.replace(/<!--\s*NN\b(?![\s\S]*-->)[\s\S]*$/i, '');
+    t = t.replace(/^\s*\[?\s*NN\b[\s:]+[^\n]*$/gim, '');
+    return t.replace(/\s+$/, '');
+}
+
+function hashText(t) {
+    let h = 0;
+    const s = String(t || '');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return h;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1081,24 +1166,11 @@ function turnKcal(turn) {
 }
 
 function headHtml(snap, open) {
-    const t = snap.turn;
-    const date = snap.date ? `<span class="nn-date">${esc(snap.date)}</span>` : '';
-    const chev = '<i class="fa-solid fa-chevron-down nn-chev"></i>';
-    if (open) {
-        const delta = [];
-        if (t) {
-            delta.push(`<span title="Прошло игрового времени"><i class="fa-regular fa-clock"></i>${fmtH(t.hours)}</span>`);
-            const kc = turnKcal(t);
-            if (kc > 0) delta.push(`<span title="Съедено и выпито в этом ответе"><i class="fa-solid fa-utensils"></i>+${kc}</span>`);
-        }
-        return `<div class="nn-head nn-head-open" role="button" tabindex="0" data-act="toggle" aria-expanded="true">
-            <span class="nn-head-title">${date ? `<i class="fa-regular fa-calendar"></i>${date}` : ''}</span>
-            <span class="nn-delta">${delta.join('')}</span>${chev}
-        </div>`;
-    }
+    // Раскрытый блок: отдельной шапки нет — кнопка «свернуть» стоит в строке вкладок
+    if (open) return '';
     return `<div class="nn-head" role="button" tabindex="0" data-act="toggle" aria-expanded="false">
         <span class="nn-people">${personChip(snap.user, 'user')}${snap.bot ? personChip(snap.bot, 'bot') : ''}</span>
-        <span class="nn-head-side">${date}</span>${chev}
+        <i class="fa-solid fa-chevron-down nn-chev"></i>
     </div>`;
 }
 
@@ -1116,7 +1188,9 @@ function bodyHtml(snap, live, tab) {
         default: pane = overviewPane(snap);
     }
     return `<div class="nn-body">
-        <div class="nn-tabs" role="tablist">${tabs}</div>
+        <div class="nn-tabs" role="tablist">${tabs}
+            <button class="nn-tab nn-collapse" data-act="toggle" aria-label="Свернуть" title="Свернуть"><i class="fa-solid fa-chevron-up"></i></button>
+        </div>
         <div class="nn-pane${pane ? '' : ' nn-pane-empty'}">${pane}</div>
     </div>`;
 }
@@ -1435,7 +1509,7 @@ function shiftWeight(data, delta) {
 }
 
 function reanalyze() {
-    // Всё делает ИИ: в следующем ответе уточнит профиль и состояние по карточкам и ролплею
+    // ИИ уточнит профиль и состояние по карточкам и ролплею в следующем ответе (через инджект)
     state.calibrate = { pending: true, doneAt: null };
     saveState();
     injectPrompt();
@@ -1743,7 +1817,7 @@ function onMessageSwiped(id) {
         if (isGreeting(id)) { scheduleRenderAll(); return; }
         const sw = m.swipes?.[m.swipe_id];
         // Переключились на уже готовый вариант — пересчитываем по его тексту
-        if (sw && sw.trim() && m.mes === sw) processAiResponse(Number(id));
+        if (sw && sw.trim() && m.mes === sw) onMessageReceived(Number(id));
         else scheduleRenderAll();
     }, 150);
 }
@@ -1801,6 +1875,7 @@ function init() {
     on(event_types.GENERATION_ENDED, onGenerationEnded);
     on(event_types.GENERATION_STOPPED, onGenerationEnded);
     on(event_types.MESSAGE_RECEIVED, onMessageReceived);
+    on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
     on(event_types.CHARACTER_MESSAGE_RENDERED, scheduleRenderAll);
     on(event_types.USER_MESSAGE_RENDERED, scheduleRenderAll);
     on(event_types.MESSAGE_SWIPED, onMessageSwiped);

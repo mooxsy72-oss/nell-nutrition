@@ -37,11 +37,8 @@ export const DISEASE_DRAIN = {
 
 // Утечка здоровья от дебаффов (в час) — раньше дебаффы не трогали здоровье вообще
 export const DEBUFF_HEALTH_DRAIN = {
-    hunger: 0.4,
-    dehydration: 0.6,
-    exhaustion: 1.0,
-    overeating: 0.3,
-    drowsiness: 0.2,
+    // Здоровье отнимают болезни и истощение; голод, жажда и сонливость сами по себе — нет
+    exhaustion: 0.3,
 };
 
 
