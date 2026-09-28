@@ -1153,12 +1153,12 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
     const surface = [];
     const background = [];
     const cue = (id) => {
-        let t = charData.focusCue?.[id] ? ` Possible detail this time: ${charData.focusCue[id]}.` : '';
-        if (charData.prevCue?.[id]) t += ` Already shown before (${charData.prevCue[id]}) — do not repeat that; show a different aspect.`;
+        let t = charData.focusCue?.[id] ? ` E.g. ${charData.focusCue[id]}.` : '';
+        if (charData.prevCue?.[id]) t += ` Not again: ${charData.prevCue[id]}.`;
         return t;
     };
     // Для персонажа игрока — только непроизвольная реакция тела, без мыслей и чувств
-    const bodyNote = opts.isUser ? ` (${charName}: show it only as an involuntary bodily reaction, never as thoughts or feelings)` : '';
+    const bodyNote = opts.isUser ? ' (body only)' : '';
 
     for (const d of charData.diseases) {
         const def = DISEASE_DB[d.id];
@@ -1191,11 +1191,11 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
 
     const out = [];
     if (surface.length) {
-        out.push(`  Surface in this reply${bodyNote} (one brief, concrete detail each, woven into action or dialogue — the suggested detail is optional, pick your own if it fits better):`);
+        out.push(`  Surface now${bodyNote}:`);
         for (const l of surface) out.push(`    • ${l}`);
     }
     if (background.length) {
-        out.push(`  Background only (shapes what they can do and how they react; do not describe it this reply): ${background.join('; ')}.`);
+        out.push(`  Background: ${background.join('; ')}.`);
     }
     return out.join('\n');
 }
