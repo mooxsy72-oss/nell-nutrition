@@ -115,6 +115,39 @@ export const EFFECT_INFO = {
         cues: ['avoids eye contact', 'answers in single words', 'covers it with a forced smile', 'wants to be alone'],
     },
 
+    // ─── Беременность: события ───
+    morning_sickness: {
+        name: 'Утренняя тошнота', kind: 'negative', icon: 'fa-face-grimace', every: 1, timed: true,
+        text: 'Мутит, еда не лезет — насыщает на 40% хуже',
+        prompt: 'morning sickness — queasy, food and strong smells turn the stomach; can barely eat',
+        cues: ['turns away from the smell of cooking', 'nibbles a dry crust and stops', 'a hand pressed to the mouth',
+            'pale, breathing slowly through the nose', 'pushes the plate away after two bites'],
+    },
+    pregnancy_appetite: {
+        name: 'Зверский аппетит', kind: 'neutral', icon: 'fa-drumstick-bite', every: 3,
+        text: 'Голод беременной: хочется есть чаще и больше',
+        prompt: 'pregnant and ravenous — hungry sooner than usual, thinks about the next meal',
+        cues: ['eyes the bread basket', 'asks when dinner will be', 'finishes a plate faster than expected', 'raids the pantry'],
+    },
+    craving: {
+        name: 'Тяга к еде', kind: 'neutral', icon: 'fa-lemon', every: 1, timed: true,
+        text: 'Очень хочется чего-то конкретного',
+        prompt: 'a pregnancy craving',
+        cues: ['can\'t stop thinking about it', 'asks if there is any', 'describes it longingly', 'would trade a lot for it right now'],
+    },
+    heartburn: {
+        name: 'Изжога', kind: 'negative', icon: 'fa-fire', every: 1, timed: true,
+        text: 'Жжение за грудиной после еды',
+        prompt: 'heartburn after eating — burning chest, uncomfortable lying down',
+        cues: ['rubs the breastbone', 'sits up straighter', 'sips water to ease a burning'],
+    },
+    baby_kicks: {
+        name: 'Малыш толкается', kind: 'positive', icon: 'fa-baby', every: 1, timed: true,
+        text: 'Шевеления',
+        prompt: 'the baby is kicking',
+        cues: ['a hand goes to the belly', 'a surprised little laugh', 'pauses mid-sentence to feel a kick', 'guides someone\'s hand to feel it'],
+    },
+
     // ─── Положительные ───
     well_fed: {
         name: 'Сытость', kind: 'positive', icon: 'fa-bowl-rice',
@@ -143,8 +176,9 @@ export function effectLevel(e) {
 export function effectView(e) {
     const info = EFFECT_INFO[e.id] || {};
     const lv = effectLevel(e);
+    const base = lv?.name || info.name || e.name || e.id;
     return {
-        name: lv?.name || info.name || e.name || e.id,
+        name: e.detail ? `${base}: ${e.detail}` : base,
         kind: lv?.kind || info.kind || 'neutral',
         icon: info.icon || 'fa-circle',
         text: lv?.text || info.text || e.effect || '',
@@ -197,15 +231,23 @@ export function toggleEffect(c, id, { on, off, linger = 0 }, hours, added, remov
 }
 
 /** Эффект на время (выспался, похмелье, стыд) — таймер обновляется */
-export function grantEffect(c, id, hoursLeft, added = []) {
+export function grantEffect(c, id, hoursLeft, added = [], detail = null) {
     const ex = findEffect(c, id);
     if (ex) {
         ex.fading = true;
         ex.fadeLeft = Math.max(ex.fadeLeft || 0, hoursLeft);
+        if (detail) ex.detail = detail;
         return;
     }
-    listFor(c, id).push({ id, fading: true, fadeLeft: hoursLeft });
+    listFor(c, id).push({ id, fading: true, fadeLeft: hoursLeft, ...(detail ? { detail } : {}) });
     added.push(id);
+}
+
+/** Детерминированная «случайность»: одно и то же для свайпов одного ответа */
+export function seededChance(seed) {
+    let h = 2166136261;
+    for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 10000) / 10000;
 }
 
 // ═══════════════════════════════════════════════════════════════

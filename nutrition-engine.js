@@ -294,6 +294,24 @@ export const MEAL_CALORIES = {
     пиво: 225,
     водка: 120,
     виски: 125,
+
+    // ── Дополнительные блюда (ккал за обычную порцию) ──
+    'похлёбка': 300, 'похлебка': 300, 'жаркое': 550, 'гуляш': 450, 'солянка': 280, 'окрошка': 220,
+    'вареники': 450, 'голубцы': 400, 'оладьи': 400, 'оладушки': 400, 'драники': 400, 'лепёшка': 250, 'лепешка': 250,
+    'пышки': 350, 'ватрушка': 280, 'кулебяка': 450, 'расстегай': 300, 'калач': 300, 'бублик': 250, 'баранки': 200,
+    'пряник': 150, 'пряники': 300, 'сушки': 150, 'халва': 250, 'пастила': 150, 'кулич': 400, 'шаньга': 300,
+    'запеканка': 350, 'тефтели': 350, 'фрикадельки': 300, 'отбивная': 450, 'стейк': 550, 'рёбрышки': 600, 'ребрышки': 600,
+    'крылышки': 450, 'окорок': 400, 'буженина': 350, 'холодец': 250, 'студень': 250, 'жульен': 300,
+    'пицца': 700, 'бургер': 600, 'гамбургер': 550, 'шаурма': 600, 'сэндвич': 400, 'тост': 150, 'тосты': 300, 'гренки': 250,
+    'хлопья': 250, 'мюсли': 300, 'лаваш': 250, 'рамен': 500, 'суши': 400, 'роллы': 450, 'манты': 500, 'хинкали': 500,
+    'чебурек': 350, 'беляш': 350, 'самса': 350, 'хачапури': 700, 'кекс': 350, 'маффин': 350, 'пончик': 300,
+    'круассан': 250, 'вафли': 300, 'мороженое': 250, 'репа': 50, 'редис': 20, 'капуста': 50, 'свёкла': 60, 'свекла': 60,
+    'сосиска': 150, 'сосиски': 300, 'колбаса': 300, 'сало': 250, 'ветчина': 190, 'бекон': 250, 'пирожки': 540,
+    'лапша': 400, 'спагетти': 450, 'картофель фри': 400, 'фри': 400, 'наггетсы': 350, 'хот-дог': 400, 'хотдог': 400,
+    'сухофрукты': 200, 'изюм': 150, 'финики': 200, 'персик': 60, 'слива': 40, 'сливы': 120, 'вишня': 80, 'клубника': 60,
+    'малина': 60, 'черника': 60, 'арбуз': 90, 'дыня': 100, 'мандарин': 40, 'мандарины': 120, 'лимон': 20,
+    'хлебец': 30, 'краюха': 250, 'горбушка': 150, 'ломоть': 100, 'сухпаёк': 800, 'сухпаек': 800, 'паёк': 600, 'паек': 600,
+    'похлёбку': 300, 'жаркого': 550,
 };
 
 export const HYDRATING_ITEMS = {
@@ -333,6 +351,9 @@ export const HYDRATING_ITEMS = {
     отвар: 20,
     крапива: 20,
     квас: 15,
+
+    'сбитень': 20, 'взвар': 22, 'какао': 18, 'медовуха': 8, 'наливка': 2, 'настойка': 1, 'эль': 8,
+    'минералка': 25, 'газировка': 20, 'кола': 20, 'холодный чай': 22, 'энергетик': 15, 'латте': 18, 'капучино': 15,
 };
 
 
@@ -353,7 +374,7 @@ export function goalOf(c) {
  * Обновляет состояние персонажа за прошедшие часы.
  * @returns {{ events: string[] }}
  */
-export function tickTime(charData, hours, activity = 'low', sleeping = false, goal = null) {
+export function tickTime(charData, hours, activity = 'low', sleeping = false, goal = null, opts = {}) {
     if (hours <= 0) return { events: [] };
     const events = [];
     const dailyGoal = goal ?? goalOf(charData);
@@ -377,6 +398,18 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     if (hasEffect(charData, 'sleep_deprived'))  energyMult += 0.30;
     if (hasEffect(charData, 'hangover'))      { energyMult += 0.30; waterMult += 0.30; }
     if ((charData.bac || 0) >= 0.9)           { energyMult += 0.15; waterMult += 0.25; }
+    const sick = (id) => (charData.diseases || []).find(d => d.id === id);
+    const fp = sick('food_poisoning');
+    if (fp && !fp.recovering)                   waterMult += fp.severity === 'mild' ? 0.2 : 0.6;
+    const dys = sick('dysentery');
+    if (dys && !dys.recovering)                 waterMult += dys.severity === 'mild' ? 0.4 : 0.9;
+    if (sick('cold'))                         { energyMult += 0.2; waterMult += 0.15; }
+    if (sick('anemia'))                         energyMult += 0.25;
+
+    // Беременность: со второго триместра голод нарастает быстрее
+    const pw = charData.pregnant ? (charData.pregnancyWeek || 0) : 0;
+    if (pw >= 27) satietyMult += 0.25;
+    else if (pw >= 14) satietyMult += 0.15;
 
     energyMult = Math.max(0.5, energyMult);
     waterMult = Math.max(0.6, waterMult);
@@ -390,6 +423,15 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     const fromFat = Math.max(0, calBurn - reserve);
     charData.reserve = Math.max(0, reserve - calBurn);
     if (fromFat > 0) changeWeight(charData, -fromFat / KCAL_PER_KG);
+    // Пока без еды меньше 14 ч, организм добирает нехватку из жира и держит
+    // небольшой запас — гипогликемия бывает только при настоящем голодании
+    if ((charData.hoursSinceLastMeal || 0) < 14) {
+        const floor = dailyGoal * 0.15;
+        if (charData.reserve < floor) {
+            changeWeight(charData, -(floor - charData.reserve) / KCAL_PER_KG);
+            charData.reserve = floor;
+        }
+    }
 
     // Недавно съеденное «переваривается» (период полураспада ~2ч)
     charData.recentIntake = (charData.recentIntake || 0) * Math.pow(0.5, hours / 2);
@@ -450,7 +492,9 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     }
     if (!isStarving && !isDehydrated && !hasHealthThreat
         && charData.satiety > 30 && charData.water > 40 && charData.energy > 25) {
-        charData.health = Math.min(100, charData.health + HEALTH_REGEN_PER_HOUR * hours);
+        // При цинге всё заживает вдвое медленнее
+        const slow = (charData.diseases || []).some(d => d.id === 'scurvy') ? 0.5 : 1;
+        charData.health = Math.min(100, charData.health + HEALTH_REGEN_PER_HOUR * hours * slow);
     }
 
     const BUFF_REGEN = {
@@ -464,6 +508,9 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
         if (regen.energy && !sleeping) charData.energy = Math.min(100, charData.energy + regen.energy * hours);
         if (regen.health) charData.health = Math.min(100, charData.health + regen.health * hours);
     }
+
+    // Лёгкий режим: голод и жажда не доводят до смерти
+    if (opts.healthFloor != null && charData.health < opts.healthFloor) charData.health = opts.healthFloor;
 
     if (charData.health <= 0) events.push('dying');
 
@@ -535,7 +582,9 @@ export function applyMeal(charData, calories, waterGain = 0, goal = null) {
     // Сытость зависит от нормы: для нормы 2000 обед в 600 ккал ≈ +39%
     // При анорексии чувство переполненности наступает раньше
     const earlyFull = charData.ed?.anorexia ? 1.3 : 1;
-    const satGain = Math.min(85, cal / g * 130 * earlyFull);
+    // Утренняя тошнота: еда «не лезет» — насыщает хуже
+    const nausea = hasEffect(charData, 'morning_sickness') ? 0.6 : 1;
+    const satGain = Math.min(85, cal / g * 130 * earlyFull * nausea);
     const overflow = charData.satiety + satGain - 100;
     charData.satiety = Math.min(100, Math.round(charData.satiety + satGain));
 

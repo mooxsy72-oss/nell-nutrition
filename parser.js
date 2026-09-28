@@ -58,6 +58,7 @@ function mergeInto(map, key, data) {
 
 for (const p of PRODUCT_DB) {
     const entry = {
+        name: norm(p.name),
         kcal: Math.round(p.cal100 * p.grams / 100),
         water: Math.round((p.water100 || 0) * p.grams / 100),
         cal100: p.cal100,
@@ -67,13 +68,15 @@ for (const p of PRODUCT_DB) {
         alco: p.cat === 'alco',
     };
     mergeInto(EXACT, norm(p.name), entry);
-    // Индексируем существительные из названия (не прилагательные)
-    for (const t of tokens(p.name)) {
+    // Индексируем существительные из названия (не прилагательные), и только
+    // до предлога: «Рыба на костре» — это рыба, а не костёр
+    const head = norm(p.name).split(/\s(?:на|в|во|с|со|из|по|под|для|без|with|on|in|of)\s/)[0];
+    for (const t of tokens(head)) {
         if (!isAdjective(t)) mergeInto(STEMS, stemWord(t), entry);
     }
 }
 for (const [k, kcal] of Object.entries(MEAL_CALORIES)) {
-    const data = { kcal, water: HYDRATING_ITEMS[k] ?? 0 };
+    const data = { name: norm(k), kcal, water: HYDRATING_ITEMS[k] ?? 0 };
     mergeInto(EXACT, norm(k), data);
     // Для словаря MEAL порционные ккал приоритетнее — кладём поверх
     const s = stemWord(k);
@@ -82,8 +85,8 @@ for (const [k, kcal] of Object.entries(MEAL_CALORIES)) {
     else STEMS.set(s, { ...data });
 }
 for (const [k, water] of Object.entries(HYDRATING_ITEMS)) {
-    mergeInto(EXACT, norm(k), { water, drink: true });
-    mergeInto(STEMS, stemWord(k), { water, drink: true });
+    mergeInto(EXACT, norm(k), { name: norm(k), water, drink: true });
+    mergeInto(STEMS, stemWord(k), { name: norm(k), water, drink: true });
 }
 // Словарные слова ("говядина", "вино") дополняем данными «на 100 г» из базы
 for (const [key, val] of EXACT) {
@@ -95,6 +98,28 @@ for (const [key, val] of EXACT) {
         }
         if (src.drink) val.drink = true;
     }
+}
+
+// Уменьшительные и неправильные формы → словарное слово
+const ALIAS_PREFIX = [
+    ['блинчик', 'блины'], ['блинк', 'блины'], ['пирожк', 'пирожок'], ['пирожоч', 'пирожок'], ['хлебуш', 'хлеб'], ['хлебц', 'хлебец'],
+    ['супчик', 'суп'], ['супц', 'суп'], ['кашк', 'каша'], ['кашиц', 'каша'], ['молочк', 'молоко'], ['яичк', 'яйцо'], ['яиц', 'яйцо'],
+    ['водичк', 'вода'], ['водиц', 'вода'], ['чаёк', 'чай'], ['чаек', 'чай'], ['чайк', 'чай'], ['чаю', 'чай'], ['чая', 'чай'], ['чаем', 'чай'],
+    ['кофеёк', 'кофе'], ['кофеек', 'кофе'], ['кофейк', 'кофе'], ['винц', 'вино'], ['винишк', 'вино'], ['пивк', 'пиво'], ['пивас', 'пиво'],
+    ['картошечк', 'картошка'], ['картофелин', 'картошка'], ['мясц', 'мясо'], ['мяса', 'мясо'], ['медок', 'мёд'], ['медк', 'мёд'], ['мёду', 'мёд'], ['меду', 'мёд'],
+    ['щей', 'щи'], ['ягодк', 'ягоды'], ['яблочк', 'яблоко'], ['сырок', 'сыр'], ['сырк', 'сыр'], ['колбаск', 'колбаса'], ['сосисочк', 'сосиски'],
+    ['бутербродик', 'бутерброд'], ['бутик', 'бутерброд'], ['оладуш', 'оладьи'], ['оладий', 'оладьи'], ['оладь', 'оладьи'], ['сухарик', 'сухари'],
+    ['конфетк', 'конфета'], ['шоколадк', 'шоколад'], ['печеньк', 'печенье'], ['тортик', 'торт'], ['пирожн', 'торт'], ['булк', 'булочка'],
+    ['котлетк', 'котлета'], ['курочк', 'курица'], ['рыбк', 'рыба'], ['похлёбк', 'похлёбка'], ['похлебк', 'похлёбка'], ['компотик', 'компот'],
+];
+function aliasOf(tok) {
+    for (const [pre, target] of ALIAS_PREFIX) if (tok.startsWith(pre)) return target;
+    return null;
+}
+function lookupToken(t) {
+    const a = aliasOf(t);
+    if (a) return EXACT.get(norm(a)) || STEMS.get(stemWord(a)) || null;
+    return EXACT.get(t) || STEMS.get(stemWord(t)) || null;
 }
 
 /**
@@ -110,7 +135,7 @@ export function lookupFood(name) {
     const toks = tokens(n);
     for (const pass of [toks.filter(t => !isAdjective(t)), toks]) {
         for (const t of pass) {
-            const hit = STEMS.get(stemWord(t)) || EXACT.get(t);
+            const hit = lookupToken(t);
             if (hit) return hit;
         }
     }
@@ -179,6 +204,17 @@ function isEmptyValue(v) {
     return !x || /^(none|null|нет|ничего|-|—|n\/a|0)$/.test(x);
 }
 
+// Свежие овощи/фрукты (для цинги) и сомнительная еда (для отравлений) — по названию из тега
+const PRODUCE_RE = /(яблок|груш|банан|апельсин|мандарин|виноград|ягод|малин|черник|клубник|брусник|клюкв|вишн|слив|персик|абрикос|арбуз|дын|лимон|фрукт|овощ|салат|капуст|морков|огур|помидор|томат|свекл|свёкл|реп|редис|лук|чеснок|зелен|черемш|щавел|крапив|шиповник|борщ|щи|квашен|сок|морс|apple|pear|berr|fruit|vegetab|salad|orange|lemon|cabbage|carrot|onion|tomato|greens)/i;
+const RISKY_RE = /(сыр(ой|ая|ое|ые|ую)|недожар|недовар|тухл|испорч|просроч|подгнил|плесен|вчерашн|лежал|улитк|лягуш|гриб|дичь|голуб|белк|кабан|падал|raw|spoiled|rotten|mould|mold|mushroom|undercooked|stale)/i;
+// Сырая вода из природных источников
+const RISKY_WATER_RE = /(руч|рек|речн|колод|пруд|озер|озёр|луж|болот|родник|ключ|талая|снег|сыр(ая|ой) вод|некипяч|stream|river|creek|pond|lake|puddle|well|swamp|raw water|unboiled)/i;
+
+export function foodFlags(name) {
+    const n = String(name || '');
+    return { produce: PRODUCE_RE.test(n), risky: RISKY_RE.test(n) };
+}
+
 function parseFoodEntry(entry) {
     const { name, amounts } = splitEntry(entry);
     const hit = lookupFood(name);
@@ -209,6 +245,7 @@ function parseFoodEntry(entry) {
 
     return {
         item: name,
+        ...foodFlags(name),
         calories: Math.max(0, Math.min(3000, Math.round(kcal))),
         water: Math.max(0, Math.min(60, Math.round(water))),
         estimated: kcalGiven == null && amounts.g == null && amounts.ml == null,
@@ -243,6 +280,8 @@ function parseDrinkEntry(entry) {
     return {
         item: name,
         ml: Math.round(ml),
+        produce: foodFlags(name).produce,
+        risky: RISKY_WATER_RE.test(name),
         alcoholG: extras.alcoholG,
         caffeineMg: extras.caffeineMg,
         water: Math.max(0, Math.min(80, Math.round(water))),
@@ -267,8 +306,9 @@ const TAG_RES = [
     /<!--\s*NN\b[\s:]*([\s\S]*?)-->/gi,
     /\[\s*NN\b[\s:]+([^\]\n]*)\]/gi,
 ];
-const KNOWN_KEYS = ['tp', 'activity', 'user_activity', 'bot_activity', 'sleeping', 'sleep', 'offscreen', 'ate', 'drank',
-    'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited'];
+const KNOWN_KEYS = ['tp', 'date', 'time', 'user_preg', 'bot_preg', 'activity', 'user_activity', 'bot_activity', 'sleeping',
+    'user_feel', 'bot_feel', 'user_profile', 'bot_profile', 'user_state', 'bot_state', 'sleep', 'offscreen', 'ate', 'drank',
+    'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care'];
 
 function findTagInner(text) {
     for (const re of TAG_RES) {
@@ -323,6 +363,12 @@ export function parseNnTag(text) {
         offscreen: null,
         userVomited: false,
         botVomited: false,
+        date: null,
+        clock: null,            // время суток из ролплея, часы (14.5 = 14:30)
+        userPreg: null, botPreg: null,   // неделя беременности (0 = не беременна)
+        userFeel: null, botFeel: null,
+        userProfile: null, botProfile: null,
+        userState: null, botState: null,
         ate: [], drank: [],
         userAte: [], botAte: [],
         userDrank: [], botDrank: [],
@@ -335,12 +381,39 @@ export function parseNnTag(text) {
     const sl = norm(f.sleeping ?? f.sleep ?? '');
     if (/^(true|yes|1|да)$/.test(sl)) result.sleeping = true;
 
+    const clean = (v, max = 120) => {
+        const x = String(v || '').replace(/\s+/g, ' ').trim();
+        return x && !isEmptyValue(x) ? x.slice(0, max) : null;
+    };
+    result.date = clean(f.date, 60);
+    const tm = String(f.time || '').match(/(\d{1,2})[:.hч](\d{2})?/);
+    if (tm) {
+        const h = +tm[1], mi = +(tm[2] || 0);
+        if (h <= 24 && mi < 60) result.clock = (h % 24) + mi / 60;
+    }
+    const preg = (v) => {
+        const m = String(v ?? '').match(/\d+/);
+        if (v == null || v === '' || !m) return null;
+        return Math.min(42, +m[0]);
+    };
+    result.userPreg = preg(f.user_preg);
+    result.botPreg = preg(f.bot_preg);
+    result.userFeel = clean(f.user_feel);
+    result.botFeel = clean(f.bot_feel);
+    result.userProfile = parseProfile(f.user_profile);
+    result.botProfile = parseProfile(f.bot_profile);
+    result.userState = parseStateCalib(f.user_state);
+    result.botState = parseStateCalib(f.bot_state);
+
     const yes = (v) => /^(true|yes|1|да)$/.test(norm(v || ''));
+    result.userCare = yes(f.user_care);
+    result.botCare = yes(f.bot_care);
     result.userVomited = yes(f.user_vomited) || yes(f.vomited);
     result.botVomited = yes(f.bot_vomited);
 
     const off = norm(f.offscreen || '');
     if (/^(fed|yes|true|сыт|ели|normal)/.test(off)) result.offscreen = 'fed';
+    else if (/^(thirst|no.?water|dry|жажд|без.?вод)/.test(off)) result.offscreen = 'thirsty';
     else if (/^(hungry|no|false|голод|starv)/.test(off)) result.offscreen = 'hungry';
 
     if (f.ate) result.ate = parseList(f.ate, parseFoodEntry);
@@ -353,136 +426,39 @@ export function parseNnTag(text) {
     return result;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// ЭВРИСТИКА — если ИИ забыл тег
-// ═══════════════════════════════════════════════════════════════
-const L = '(?<![\\p{L}])';         // граница слова, работающая с кириллицей
-const WORDS = '([\\p{L}]+(?:\\s+[\\p{L}]+)?)';
-
-const EAT_PATTERNS = [
-    new RegExp(`\\b(?:eats?|ate|eating|devours?|devoured|finish(?:es|ed)?|bites? into|chews?)\\s+(?:a |an |some |the |his |her |their )?${WORDS}`, 'giu'),
-    new RegExp(`${L}(?:ест|съедает|съела?|поела?|доедает|доела?|кушает|жу[её]т|уплетает|перекусывает|откусывает|заглатывает|пожирает)\\s+${WORDS}`, 'giu'),
-];
-const DRINK_PATTERNS = [
-    new RegExp(`\\b(?:drinks?|drank|sips?|sipped|gulps?|gulped|downs?|downed)\\s+(?:a |an |some |the |his |her |their )?(?:cup of |glass of |mug of |bottle of )?${WORDS}`, 'giu'),
-    new RegExp(`${L}(?:пь[её]т|выпивает|выпила?|отпивает|отпила?|глотает|глотнула?|допивает|допила?|прихл[её]бывает)\\s+${WORDS}`, 'giu'),
-];
-const SLEEP_PATTERNS = [
-    /\b(?:falls?\s+asleep|fell\s+asleep|went\s+to\s+sleep|slept|dozes?\s+off|dozed\s+off)\b/i,
-    new RegExp(`${L}(?:засыпает|уснула?|заснула?|проспала?|легла?\\s+спать)(?![\\p{L}])`, 'iu'),
-];
-
-function firstFoodWord(phrase) {
-    const toks = tokens(phrase);
-    // "жареную курицу" → ищем по существительному, но показываем фразу целиком
-    for (const t of toks) {
-        const hit = STEMS.get(stemWord(t)) || EXACT.get(t);
-        if (hit) return { word: toks.slice(0, toks.indexOf(t) + 1).join(' '), hit };
-    }
-    return null;
-}
-
-function negatedBefore(text, idx) {
-    const before = text.slice(Math.max(0, idx - 12), idx).toLowerCase();
-    return /(не|not|n't|never|никогда не)\s*$/.test(before.trim() + ' ') || /\b(не|not)\s+$/.test(before);
-}
-
-/**
- * @returns {{ meals: Array, drinks: Array, sleeping: boolean }}
- */
-export function detectFromText(text) {
-    if (!text) return { meals: [], drinks: [], sleeping: false };
-    const meals = [], drinks = [];
-
-    for (const re of EAT_PATTERNS) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-            if (negatedBefore(text, m.index)) continue;
-            const f = firstFoodWord(m[1]);
-            if (f && !f.hit.drink && f.hit.kcal) {
-                meals.push({ item: f.word, calories: f.hit.kcal, water: f.hit.water || 0, estimated: true });
-            }
+// ─── Калибровка: user_profile=f/24/165/57/slim/light/none ───
+const BUILDS = ['slim', 'average', 'athletic', 'muscular', 'heavy'];
+const LIFESTYLES = ['sedentary', 'light', 'moderate', 'active', 'very_active'];
+function parseProfile(v) {
+    if (!v || isEmptyValue(v)) return null;
+    const p = String(v).split(/[\/;,]/).map(x => norm(x));
+    const out = {};
+    const g = p[0] || '';
+    if (/^(m|male|м|муж)/.test(g)) out.gender = 'male';
+    else if (/^(f|female|ж|жен)/.test(g)) out.gender = 'female';
+    const age = parseInt(p[1]); if (age >= 14 && age <= 110) out.age = age;
+    const h = parseInt(p[2]); if (h >= 110 && h <= 240) out.height = h;
+    const w = parseFloat((p[3] || '').replace(',', '.')); if (w >= 30 && w <= 300) out.weight = w;
+    const b = (p[4] || '').replace(/\s+/g, '_'); if (BUILDS.includes(b)) out.build = b;
+    const l = (p[5] || '').replace(/[\s-]+/g, '_'); if (LIFESTYLES.includes(l)) out.activity = l;
+    const pw = parseInt(p[7]);
+    if (!isNaN(pw) && pw >= 0 && pw <= 42) out.pregnancyWeek = pw;
+    const ed = p[6] || '';
+    if (ed) {
+        out.ed = {};
+        for (const part of ed.split(/[+&]/)) {
+            const m = part.trim().match(/^(anorexia|bulimia|binge)(?::(mild|moderate|severe))?/);
+            if (m) out.ed[m[1]] = m[2] || 'moderate';
         }
     }
-    for (const re of DRINK_PATTERNS) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-            if (negatedBefore(text, m.index)) continue;
-            const f = firstFoodWord(m[1]);
-            const hit = f?.hit;
-            if (hit && (hit.drink || hit.water)) {
-                const ml = hit.grams ?? 250;
-                drinks.push({
-                    item: f.word, ml, ...drinkExtras(f.word, ml),
-                    water: Math.round(hit.water100 != null ? hit.water100 * ml / 100 : hit.water),
-                    calories: Math.round((hit.cal100 || 0) * ml / 100),
-                });
-            }
-        }
-    }
-    const sleeping = SLEEP_PATTERNS.some(re => re.test(text));
-
-    return { meals: dedup(meals), drinks: dedup(drinks), sleeping };
+    return Object.keys(out).length ? out : null;
 }
 
-function dedup(arr) {
-    const seen = new Set();
-    return arr.filter(x => (seen.has(x.item) ? false : (seen.add(x.item), true)));
-}
-
-// ═══════════════════════════════════════════════════════════════
-// АКТИВНОСТЬ ПО ТЕКСТУ — если ИИ не указал её в теге
-// Берём самый высокий уровень, найденный в сцене.
-// ═══════════════════════════════════════════════════════════════
-const ACT_WORDS = {
-    high: [
-        'бе[гж]\\p{L}*', 'побежал\\p{L}*', 'убега\\p{L}*', 'мчит\\p{L}*', 'несёт\\p{L}*ся', 'несет\\p{L}*ся',
-        'дерут\\p{L}*', 'дер[её]т\\p{L}*', 'дрался', 'дралась', 'сражает\\p{L}*', 'сражал\\p{L}*', 'бой', 'боя', 'битв\\p{L}*', 'схватк\\p{L}*', 'драк\\p{L}*',
-        'уклоня\\p{L}*', 'фехтова\\p{L}*', 'рубит', 'рубил\\p{L}*', 'карабка\\p{L}*', 'взбира\\p{L}*', 'плыв[её]т', 'плыл\\p{L}*',
-        'тащит', 'тащил\\p{L}*', 'волочит', 'копает', 'копал\\p{L}*', 'колет дрова', 'погон\\p{L}*', 'спасается', 'тренир\\p{L}*',
-        'run', 'runs', 'ran', 'running', 'sprint\\p{L}*', 'fight\\p{L}*', 'fought', 'battle\\p{L}*', 'combat', 'climb\\p{L}*',
-        'swim\\p{L}*', 'swam', 'dodg\\p{L}*', 'chase\\p{L}*', 'drag\\p{L}*', 'haul\\p{L}*', 'dig\\p{L}*', 'train\\p{L}*',
-    ],
-    medium: [
-        'ид[её]т', 'идут', 'ид[её]м', 'идя', 'шла', 'шёл', 'шел', 'шли', 'шагает', 'шага\\p{L}*', 'брела', 'брёл', 'брел', 'брели', 'бред[её]т', 'бредут',
-        'пош[её]л', 'пошла', 'пошли', 'добира\\p{L}*', 'спускал\\p{L}*', 'спуска\\p{L}*ся', 'поднял\\p{L}*ся', 'собира\\p{L}*', 'собрал\\p{L}*',
-        'несла', 'несли', 'дорог\\p{L}* заняла', 'шагал\\p{L}*', 'гуля\\p{L}*', 'прогулк\\p{L}*', 'бродит', 'бродил\\p{L}*', 'поднима\\p{L}* по',
-        'убира\\p{L}*', 'готовит', 'готовил\\p{L}*', 'стряпа\\p{L}*', 'моет', 'мыл\\p{L}*', 'стирает', 'работает', 'работал\\p{L}*',
-        'несёт', 'несет', 'нёс', 'нес', 'таскает', 'танцу\\p{L}*', 'скачет верхом', 'едет верхом', 'рыбач\\p{L}*', 'собирает', 'охоти\\p{L}*',
-        'walk\\p{L}*', 'stroll\\p{L}*', 'hike\\p{L}*', 'hiking', 'clean\\p{L}*', 'cook\\p{L}*', 'carr\\p{L}*', 'danc\\p{L}*', 'work\\p{L}*', 'ride\\p{L}*', 'riding',
-    ],
-};
-const ACT_RES = Object.fromEntries(Object.entries(ACT_WORDS).map(([k, list]) =>
-    [k, new RegExp(`(?<![\\p{L}])(?:${list.join('|')})(?![\\p{L}])`, 'iu')]));
-
-/** @returns {'low'|'medium'|'high'} */
-export function detectActivity(text) {
-    const t = String(text || '').replace(/<!--[\s\S]*?-->/g, '');
-    if (ACT_RES.high.test(t)) return 'high';
-    if (ACT_RES.medium.test(t)) return 'medium';
-    return 'low';
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ИГРОВОЕ ВРЕМЯ (Horae + RP_DATE)
-// ═══════════════════════════════════════════════════════════════
-const HORAE_TIME_RE = /time:\s*(\d{1,4})[\/\-](\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{2})/i;
-const HORAE_DATE_RE = /(?:date|time):\s*(\d{1,4})[\/\-](\d{1,2})[\/\-](\d{1,2})/i;
-const RP_DATE_RE = /\[RP_DATE:\s*(\d{1,2})\.(\d{1,2})\.(\d{1,4})\]/i;
-
-function calendarMinutes(y, mo, d, h = 0, min = 0) {
-    return Date.UTC(y, mo - 1, d, h, min) / 60000;
-}
-
-export function parseGameTime(text) {
-    if (!text) return null;
-    const mFull = text.match(HORAE_TIME_RE);
-    if (mFull) return { totalMinutes: calendarMinutes(+mFull[1], +mFull[2], +mFull[3], +mFull[4], +mFull[5]), hasClock: true, hour: +mFull[4] + (+mFull[5]) / 60 };
-    const mDate = text.match(HORAE_DATE_RE);
-    if (mDate) return { totalMinutes: calendarMinutes(+mDate[1], +mDate[2], +mDate[3]), hasClock: false };
-    const mRp = text.match(RP_DATE_RE);
-    if (mRp) return { totalMinutes: calendarMinutes(+mRp[3], +mRp[2], +mRp[1]), hasClock: false };
-    return null;
+// user_state=сытость/вода/энергия (0–100)
+function parseStateCalib(v) {
+    if (!v || isEmptyValue(v)) return null;
+    const n = String(v).split(/[\/;,]/).map(x => parseInt(x));
+    const ok = (x) => !isNaN(x) && x >= 0 && x <= 100;
+    if (!ok(n[0]) && !ok(n[1]) && !ok(n[2])) return null;
+    return { satiety: ok(n[0]) ? n[0] : null, water: ok(n[1]) ? n[1] : null, energy: ok(n[2]) ? n[2] : null };
 }

@@ -2,7 +2,7 @@
 // Продвинутая система болезней, беременности и физиологических состояний.
 
 import { goalOf } from './nutrition-engine.js';
-import { EFFECT_INFO, effectLevel, toggleEffect, grantEffect, hasEffect } from './effects.js';
+import { EFFECT_INFO, effectLevel, toggleEffect, grantEffect, hasEffect, seededChance } from './effects.js';
 
 // ═══════════════════════════════════════════════════════════════
 // DISEASE DEFINITIONS — полное описание каждой болезни
@@ -201,6 +201,98 @@ export const DISEASE_DB = {
         recovery: { severe: 12, critical: 24 },
     },
 
+    // ─── Болезни-события: случаются сами, шанс зависит от состояния ───
+    cold: {
+        id: 'cold', nameRu: 'Простуда', nameEn: 'Cold / flu', category: 'physical', event: true,
+        stages: {
+            mild: { effects: ['Насморк', 'Першение в горле'], modifiers: { energy: -5 },
+                symptoms: 'Runny nose, scratchy throat, sneezing; a little slower and grumpier than usual.',
+                cues: ['sniffles', 'a muffled sneeze', 'clears a scratchy throat', 'wraps both hands around a hot cup'] },
+            moderate: { effects: ['Кашель', 'Температура', 'Ломота'], modifiers: { energy: -15, physical: -15 },
+                symptoms: 'Fever, cough, aching body; wants warmth and rest; appetite poor.',
+                cues: ['a rattling cough', 'flushed cheeks, glassy eyes', 'shivers despite the warmth', 'burrows under a blanket'] },
+            severe: { effects: ['Сильный жар', 'Озноб', 'Бред'], modifiers: { energy: -35, physical: -40 },
+                symptoms: 'High fever and chills, barely able to get up, drifting in feverish dozes; needs someone to look after them.',
+                cues: ['forehead burning to the touch', 'teeth chattering', 'mumbles something in a feverish doze'] },
+        },
+        course: { mild: 48, moderate: 72, severe: 96 },
+        recovery: { mild: 24, moderate: 48, severe: 96 },
+    },
+    food_poisoning: {
+        id: 'food_poisoning', nameRu: 'Пищевое отравление', nameEn: 'Food poisoning', category: 'physical', event: true,
+        stages: {
+            mild: { effects: ['Тошнота', 'Спазмы в животе'], modifiers: { energy: -10 },
+                symptoms: 'Queasy stomach and cramps after something they ate; no appetite.',
+                cues: ['a hand on the stomach', 'grimaces at a cramp', 'pushes food away', 'sips water carefully'] },
+            moderate: { effects: ['Рвота', 'Диарея', 'Слабость'], modifiers: { energy: -25, physical: -25 },
+                symptoms: 'Vomiting and diarrhoea, weak and pale, losing fluids fast; needs water and rest.',
+                cues: ['bolts outside suddenly', 'pale and sweaty', 'curled up, knees to chest'] },
+            severe: { effects: ['Сильная рвота', 'Обезвоживание', 'Жар'], modifiers: { energy: -45, physical: -50 },
+                symptoms: 'Violent vomiting, fever, can\'t keep water down; dangerously dehydrated without help.',
+                cues: ['can\'t keep even water down', 'shaking with fever', 'too weak to sit up'] },
+        },
+        course: { mild: 8, moderate: 18, severe: 36 },
+        recovery: { mild: 6, moderate: 18, severe: 36 },
+    },
+    dysentery: {
+        id: 'dysentery', nameRu: 'Дизентерия', nameEn: 'Dysentery', category: 'physical', event: true,
+        stages: {
+            mild: { effects: ['Боли в животе', 'Частый понос'], modifiers: { energy: -15 },
+                symptoms: 'Cramping belly and frequent loose stools after drinking bad water; losing fluids.',
+                cues: ['doubles over at a cramp', 'excuses themselves again', 'drinks thirstily but stays pale'] },
+            moderate: { effects: ['Кровавый понос', 'Жар', 'Обезвоживание'], modifiers: { energy: -30, physical: -30 },
+                symptoms: 'The bloody flux: fever, painful cramps, fast dehydration; too weak to travel.',
+                cues: ['hollow-eyed and feverish', 'lips cracked from thirst', 'can barely stand'] },
+            severe: { effects: ['Сильное обезвоживание', 'Бред', 'Упадок сил'], modifiers: { energy: -50, physical: -60 },
+                symptoms: 'Severe flux and fever, delirious, wasting fast; without constant water and care it can kill.',
+                cues: ['skin loose and dry', 'mumbles in delirium', 'can\'t lift a cup alone'] },
+        },
+        course: { mild: 72, moderate: 120, severe: 168 },
+        recovery: { mild: 24, moderate: 72, severe: 120 },
+    },
+    gastritis: {
+        id: 'gastritis', nameRu: 'Гастрит', nameEn: 'Gastritis', category: 'physical', event: true,
+        stages: {
+            mild: { effects: ['Боль в желудке после еды', 'Изжога'], modifiers: { energy: -5 },
+                symptoms: 'Burning stomach pain after eating or on an empty stomach; picky about food.',
+                cues: ['winces after a few bites', 'presses a hand under the ribs', 'avoids anything spicy'] },
+            moderate: { effects: ['Сильные боли', 'Тошнота', 'Нет аппетита'], modifiers: { energy: -15 },
+                symptoms: 'Gnawing stomach pain, nausea, eating becomes a chore.',
+                cues: ['hunched over from stomach pain', 'eats a few spoonfuls and stops', 'bitter taste, grimacing'] },
+        },
+        recovery: { mild: 72, moderate: 168 },
+    },
+    anemia: {
+        id: 'anemia', nameRu: 'Анемия', nameEn: 'Anemia', category: 'physical', event: true,
+        stages: {
+            mild: { effects: ['Бледность', 'Быстрая утомляемость'], modifiers: { energy: -10 },
+                symptoms: 'Pale, tires quickly, cold hands.',
+                cues: ['pale lips', 'out of breath on the stairs', 'cold fingers'] },
+            moderate: { effects: ['Головокружение', 'Одышка', 'Слабость'], modifiers: { energy: -20, physical: -15 },
+                symptoms: 'Dizzy when standing up, short of breath, weak and cold.',
+                cues: ['steadies herself on the wall when standing', 'dark circles under the eyes', 'breathes hard after a short walk'] },
+            severe: { effects: ['Обмороки', 'Сильная слабость'], modifiers: { energy: -35, physical: -35 },
+                symptoms: 'Near-fainting spells, racing heart, very weak; needs rest and proper food.',
+                cues: ['vision greys out for a moment', 'heart pounding at rest', 'has to sit down mid-task'] },
+        },
+        recovery: { mild: 168, moderate: 336, severe: 504 },
+    },
+    scurvy: {
+        id: 'scurvy', nameRu: 'Цинга', nameEn: 'Scurvy', category: 'physical', event: true,
+        stages: {
+            mild: { effects: ['Слабость', 'Кровоточат дёсны'], modifiers: { energy: -10 },
+                symptoms: 'Weeks without fresh produce: tired, gums bleed when eating.',
+                cues: ['a trace of blood on the bread', 'rubs aching gums', 'unusually tired'] },
+            moderate: { effects: ['Синяки', 'Боль в суставах'], modifiers: { energy: -20, physical: -20 },
+                symptoms: 'Bruises appear from nothing, joints ache, old scrapes won\'t heal.',
+                cues: ['a bruise no one remembers getting', 'stiff aching knees', 'a cut that stays open'] },
+            severe: { effects: ['Шатаются зубы', 'Раны не заживают'], modifiers: { energy: -35, physical: -40 },
+                symptoms: 'Loose teeth, swollen gums, wounds reopening; the body is falling apart without fresh food.',
+                cues: ['a loose tooth', 'swollen, dark gums', 'an old scar splitting open'] },
+        },
+        recovery: { mild: 72, moderate: 168, severe: 336 },
+    },
+
     // ─── Психика: последствия голода ───
     food_obsession: {
         id: 'food_obsession', nameRu: 'Пищевая одержимость', nameEn: 'Food preoccupation', category: 'mental',
@@ -328,12 +420,10 @@ export function applyPregnancyEffects(charData, hours = 0) {
         return { nausea: false, extraFatigue: false, trimesterLabel: '' };
     }
     const stage = getPregnancyStage(charData.pregnancyWeek);
-    const nausea = !!stage.nausea && charData.satiety > 20;
+    const nausea = !!stage.nausea;
     const extraFatigue = !!stage.fatigue;
 
-    // Эффекты пропорциональны прошедшему времени (без случайности —
-    // иначе свайп одного и того же ответа давал бы разные цифры)
-    if (nausea && hours > 0) charData.satiety = Math.max(0, charData.satiety - 1.2 * hours);
+    // Тошнота теперь событие (утром, после сна), здесь только усталость 3-го триместра
     if (extraFatigue && hours > 0) charData.energy = Math.max(0, charData.energy - 0.6 * hours);
 
     return { nausea, extraFatigue, trimesterLabel: stage.label };
@@ -364,8 +454,15 @@ export function calculateImmunity(charData) {
     if (charData.energy < 30) immunity -= 10;
     if (charData.hoursSinceLastMeal > 16) immunity -= 15;
 
-    // Болезни снижают иммунитет
-    immunity -= charData.diseases.length * 10;
+    // Недосып, недоедание, алкоголь — минус; выспался и сыт — плюс
+    if (hasEffect(charData, 'sleep_deprived')) immunity -= 10;
+    if ((charData.daysWithDeficit || 0) >= 3) immunity -= 10;
+    if ((charData.bac || 0) >= 0.9) immunity -= 5;
+    if (hasEffect(charData, 'rested')) immunity += 5;
+    if (hasEffect(charData, 'well_fed')) immunity += 5;
+
+    // Физические болезни снижают иммунитет
+    immunity -= charData.diseases.filter(d => DISEASE_DB[d.id]?.category !== 'mental').length * 10;
 
     // Беременность немного снижает
     if (charData.pregnant) immunity -= 5;
@@ -384,6 +481,13 @@ export function calculateImmunity(charData) {
  * @returns {{ added: string[], removed: string[], progressed: string[] }}
  */
 export function evaluateConditions(charData, hours = 0) {
+    if ((charData.careLeft || 0) > 0) charData.careLeft = Math.max(0, charData.careLeft - hours);
+    // Средний иммунитет за последние сутки — по нему бросаем шанс заболеть
+    if (hours > 0) {
+        const now = calculateImmunity(charData);
+        const k = Math.min(1, hours / 24);
+        charData.immAvg = charData.immAvg == null ? now : charData.immAvg + (now - charData.immAvg) * k;
+    }
     const added = [];
     const removed = [];
     const progressed = [];
@@ -456,7 +560,7 @@ function evaluateDisease(charData, diseaseDef, hours, added, removed, progressed
             existing.recoveryHours = 0;
             recovering.push(diseaseDef.id);
         } else {
-            existing.recoveryHours = (existing.recoveryHours || 0) + hours;
+            existing.recoveryHours = (existing.recoveryHours || 0) + recoverStep(charData, hours);
         }
 
         const needHours = diseaseDef.recovery?.[existing.severity] ?? 6;
@@ -489,7 +593,34 @@ function evaluateDisease(charData, diseaseDef, hours, added, removed, progressed
     }
 }
 
+// Эпоха: 'modern' | 'historical' (без современной медицины — инфекции чаще, болеют дольше)
+let era = 'modern';
+export function setEra(v) { era = v === 'historical' ? 'historical' : 'modern'; }
+const isHistorical = () => era === 'historical';
+
+// Скорость выздоровления: без медицины медленнее, уход (лекарь, травы, покой) — быстрее
+function recoverStep(c, hours) {
+    const care = (c.careLeft || 0) > 0 ? 1.6 : 1;
+    const eraMult = isHistorical() ? 1 / 1.5 : 1;
+    return hours * care * eraMult;
+}
+const courseMult = () => (isHistorical() ? 1.3 : 1);
+
+// Лёгкий режим: болезни от голода и жажды не доходят до тяжёлых стадий
+let hungerCap = false;
+export function setHungerCap(v) { hungerCap = !!v; }
+const HUNGER_IDS = ['hypoglycemia', 'starvation', 'dehydration_disease', 'malnutrition',
+    'cold', 'food_poisoning', 'dysentery', 'gastritis', 'anemia', 'scurvy'];
+function capStage(id, stage) {
+    if (!hungerCap || !HUNGER_IDS.includes(id)) return stage;
+    return stage === 'severe' || stage === 'critical' ? 'moderate' : stage;
+}
+
 function determineStage(charData, diseaseDef) {
+    return capStage(diseaseDef.id, determineStageRaw(charData, diseaseDef));
+}
+
+function determineStageRaw(charData, diseaseDef) {
     const stages = ['critical', 'severe', 'moderate', 'mild'];
 
     for (const stage of stages) {
@@ -531,6 +662,7 @@ function evaluateMalnutrition(charData, hours, added, removed, progressed, recov
     if (days >= 14) stage = 'severe';
     else if (days >= 7) stage = 'moderate';
     else if (days >= 3) stage = 'mild';
+    stage = capStage('malnutrition', stage);
 
     if (!existing) {
         if (stage) {
@@ -550,7 +682,7 @@ function evaluateMalnutrition(charData, hours, added, removed, progressed, recov
             existing.recoveryHours = 0;
             recovering.push('malnutrition');
         } else {
-            existing.recoveryHours = (existing.recoveryHours || 0) + hours;
+            existing.recoveryHours = (existing.recoveryHours || 0) + recoverStep(charData, hours);
         }
         if (existing.recoveryHours >= (def.recovery?.[existing.severity] ?? 48)) {
             charData.diseases = charData.diseases.filter(d => d.id !== 'malnutrition');
@@ -575,6 +707,7 @@ const STAGE_ORDER = ['mild', 'moderate', 'severe', 'critical'];
 
 function customDisease(c, id, stage, cureMet, hours, added, removed, progressed, recovering) {
     const def = DISEASE_DB[id];
+    stage = capStage(id, stage);
     const ex = c.diseases.find(d => d.id === id);
     if (!ex) {
         if (stage && !cureMet) {
@@ -588,7 +721,7 @@ function customDisease(c, id, stage, cureMet, hours, added, removed, progressed,
 
     if (cureMet || !stage) {
         if (!ex.recovering) { ex.recovering = true; ex.recoveryHours = 0; recovering.push(id); }
-        else ex.recoveryHours = (ex.recoveryHours || 0) + hours;
+        else ex.recoveryHours = (ex.recoveryHours || 0) + recoverStep(c, hours);
         if (ex.recoveryHours >= (def.recovery?.[ex.severity] ?? 12)) {
             c.diseases = c.diseases.filter(d => d.id !== id);
             removed.push(id);
@@ -618,6 +751,35 @@ function evaluateExtraDiseases(c, hours, added, removed, progressed, recovering)
     // Рефидинг — появляется только при еде (checkRefeeding), здесь лишь выздоровление
     const rf = c.diseases.find(d => d.id === 'refeeding');
     if (rf) customDisease(c, 'refeeding', rf.severity, true, ...args);
+
+    // Простуда и отравление идут своим курсом, потом выздоровление
+    for (const id of ['cold', 'food_poisoning', 'dysentery']) {
+        const ex = c.diseases.find(d => d.id === id);
+        if (!ex) continue;
+        let stage = ex.severity;
+        // Слабый иммунитет — простуда через сутки может перейти в тяжёлую форму
+        const worsenAt = isHistorical() ? 50 : 40;
+        if ((id === 'cold' || id === 'dysentery') && !ex.worsened && (ex.elapsedHours || 0) >= 24 && calculateImmunity(c) < worsenAt && !ex.recovering) {
+            stage = STAGE_ORDER[Math.min(2, STAGE_ORDER.indexOf(stage) + 1)];
+            ex.worsened = true;
+        }
+        const course = (DISEASE_DB[id].course[ex.severity] ?? 24) * courseMult() / ((c.careLeft || 0) > 0 ? 1.3 : 1);
+        customDisease(c, id, stage, (ex.elapsedHours || 0) >= course, ...args);
+    }
+
+    // Гастрит — держится, пока питание нерегулярное
+    const gx = c.diseases.find(d => d.id === 'gastritis');
+    if (gx) customDisease(c, 'gastritis', days >= 5 ? 'moderate' : gx.severity, days === 0 && hslm < 8, ...args);
+
+    // Анемия — от долгого недоедания; у беременных — быстрее
+    const pregAnemia = c.pregnant && (c.pregnancyWeek || 0) >= 20 && days >= 3;
+    customDisease(c, 'anemia',
+        days >= 21 ? 'severe' : days >= 14 ? 'moderate' : (days >= 10 || pregAnemia) ? 'mild' : null,
+        days === 0 && c.satiety >= 60, ...args);
+
+    // Цинга — недели без свежих овощей и фруктов
+    const np = c.daysNoProduce || 0;
+    customDisease(c, 'scurvy', np >= 60 ? 'severe' : np >= 45 ? 'moderate' : np >= 30 ? 'mild' : null, np === 0, ...args);
 
     // Пищевая одержимость
     customDisease(c, 'food_obsession',
@@ -712,9 +874,147 @@ function evaluateEffects(c, hours, added, removed) {
     T('hydrated', { on: c.water >= 80, off: c.water < 65, linger: 2 });
     T('high_energy', { on: c.energy >= 85, off: c.energy < 70, linger: 2 });
 
+    // Беременность: со второго триместра голод просыпается раньше
+    const pw = c.pregnant ? (c.pregnancyWeek || 0) : 0;
+    T('pregnancy_appetite', { on: pw >= 14 && c.satiety <= 50, off: pw < 14 || c.satiety > 65, linger: 0 });
+
     // Эффекты с таймером (выспался, похмелье, стыд…) — просто тикают
-    for (const id of ['rested', 'hangover', 'post_meal_anxiety', 'shame']) {
+    for (const id of ['rested', 'hangover', 'post_meal_anxiety', 'shame',
+        'morning_sickness', 'craving', 'heartburn', 'baby_kicks']) {
         T(id, { on: false, off: true, linger: 0 });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// СОБЫТИЯ БЕРЕМЕННОСТИ — срабатывают сами, без участия пользователя
+// Случайность привязана к дню и ходу, поэтому свайп даёт тот же результат.
+// ═══════════════════════════════════════════════════════════════
+const CRAVINGS = ['солёные огурцы', 'что-то сладкое', 'что-то кислое', 'мясо', 'свежие фрукты', 'квашеная капуста',
+    'холодное молоко', 'сыр', 'мёд', 'что-то острое', 'жареная картошка', 'ягоды'];
+
+/**
+ * @param {{ woke?: boolean, hour?: number, day?: number, turn?: number, mealKcal?: number, activity?: string, sleeping?: boolean }} ev
+ * @returns {{ vomited: boolean }}
+ */
+export function pregnancyEvents(c, ev, added = []) {
+    const out = { vomited: false };
+    if (!c.pregnant || !(c.pregnancyWeek > 0)) return out;
+    const w = c.pregnancyWeek;
+    const g = goalOf(c);
+    const key = `${c.charId || c.name}|${ev.day}`;
+    const morning = ev.hour >= 5 && ev.hour < 11;
+
+    // Утренняя тошнота: 5–15 неделя, после пробуждения или утром, раз в день, ~2 утра из 3
+    if (w >= 5 && w <= 15 && ((ev.woke && ev.hour < 13) || morning) && c.sicknessDay !== ev.day) {
+        c.sicknessDay = ev.day;
+        const chance = w >= 7 && w <= 12 ? 0.7 : 0.45;
+        if (seededChance(`${key}|sick`) < chance) grantEffect(c, 'morning_sickness', 3, added);
+    }
+    // Во время тошноты плотная еда может не удержаться
+    if (hasEffect(c, 'morning_sickness') && (ev.mealKcal || 0) >= g * 0.15
+        && seededChance(`${key}|${ev.turn}|vomit`) < 0.3) {
+        out.vomited = true;
+    }
+    // Тяга к конкретной еде: 8–34 неделя, раз в день, в ~40% дней
+    if (w >= 8 && w <= 34 && !ev.sleeping && c.cravingDay !== ev.day && ev.hour >= 10) {
+        c.cravingDay = ev.day;
+        if (seededChance(`${key}|crave`) < 0.4) {
+            const item = CRAVINGS[Math.floor(seededChance(`${key}|what`) * CRAVINGS.length)];
+            grantEffect(c, 'craving', 4, added, item);
+        }
+    }
+    // Изжога: третий триместр, после плотной еды, в половине случаев
+    if (w >= 27 && (ev.mealKcal || 0) >= g * 0.2 && seededChance(`${key}|${ev.turn}|burn`) < 0.5) {
+        grantEffect(c, 'heartburn', 2, added);
+    }
+    // Шевеления: с 20 недели, в спокойные моменты, примерно каждый четвёртый ход
+    if (w >= 20 && !ev.sleeping && ev.activity === 'low' && seededChance(`${key}|${ev.turn}|kick`) < 0.25) {
+        grantEffect(c, 'baby_kicks', 1, added);
+    }
+    return out;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// БОЛЕЗНИ-СОБЫТИЯ — случаются сами, шанс зависит от иммунитета и еды
+// ═══════════════════════════════════════════════════════════════
+/**
+ * @param {{ day:number, turn:number, foods?: Array<{item:string, risky?:boolean}>, drinks?: Array<{item:string, risky?:boolean}>, hard?: boolean }} ev
+ * @returns {{ vomited: boolean }}
+ */
+export function illnessEvents(c, ev, added = []) {
+    const out = { vomited: false };
+    const has = (id) => c.diseases.some(d => d.id === id);
+    const spawn = (id, sev) => {
+        c.diseases.push(makeDisease(DISEASE_DB[id], capStage(id, sev)));
+        added.push(id);
+    };
+    const imm = Math.round(c.immAvg ?? calculateImmunity(c));
+    const key = c.charId || c.name || '?';
+    const hist = isHistorical();
+    const infMult = hist ? 2 : 1;   // без современной медицины и гигиены инфекции чаще
+
+    // Раз в игровой день (за каждый прошедший день, максимум 30)
+    const from = Math.max((c.illRollDay ?? ev.day - 1) + 1, ev.day - 30);
+    for (let d = from; d <= ev.day; d++) {
+        if (!has('cold')) {
+            // Крепкий иммунитет — простуда раз в несколько месяцев, слабый — раз в пару недель
+            let p = 0.004 + Math.max(0, 60 - imm) / 100 * 0.25;
+            if (hasEffect(c, 'sleep_deprived')) p += 0.04;
+            if (hasEffect(c, 'exhaustion')) p += 0.03;
+            if (hasEffect(c, 'hangover')) p += 0.02;
+            if (c.water < 30) p += 0.02;
+            if (seededChance(`${key}|${d}|cold`) < p * infMult) spawn('cold', imm < (hist ? 35 : 25) ? 'moderate' : 'mild');
+        }
+        if (!has('gastritis') && ((c.daysWithDeficit || 0) >= 3 || (c.hoursSinceLastMeal || 0) >= 16)) {
+            let p = 0.04;
+            if ((c.caffeine || 0) > 200) p += 0.02;
+            if ((c.bacPeak || 0) > 0.5) p += 0.02;
+            if (seededChance(`${key}|${d}|gastr`) < p) spawn('gastritis', 'mild');
+        }
+    }
+    c.illRollDay = ev.day;
+
+    // Отравление: сомнительная еда (сырое, испорченное, лесные грибы, дичь) или совсем слабый иммунитет
+    if (!has('food_poisoning')) {
+        for (const f of ev.foods || []) {
+            let p = f.risky ? (ev.hard ? 0.1 : 0.05) : 0;
+            if (hist) p = p * infMult + 0.002;   // в старину даже обычная еда иногда подводит
+            if (imm < 30) p += 0.02;
+            if (p <= 0 || seededChance(`${key}|${ev.turn}|${f.item}|fp`) >= p) continue;
+            const r = seededChance(`${key}|${ev.turn}|fpsev`);
+            const sev = r < (hist ? 0.45 : 0.55) ? 'mild' : r < (hist ? 0.85 : 0.9) ? 'moderate' : 'severe';
+            spawn('food_poisoning', sev);
+            if (capStage('food_poisoning', sev) !== 'mild') out.vomited = true;
+            break;
+        }
+    }
+    // Дизентерия: сырая вода из ручья, реки, колодца, пруда
+    if (!has('dysentery')) {
+        for (const d of ev.drinks || []) {
+            if (!d.risky) continue;
+            let p = hist ? 0.06 : 0.01;
+            if (ev.hard) p *= 1.5;
+            if (imm < 40) p += 0.02;
+            if (seededChance(`${key}|${ev.turn}|${d.item}|dys`) >= p) continue;
+            spawn('dysentery', seededChance(`${key}|${ev.turn}|dyssev`) < (hist ? 0.35 : 0.2) ? 'moderate' : 'mild');
+            break;
+        }
+    }
+    return out;
+}
+
+/**
+ * Лёгкий режим: болезни от голода и жажды не доходят до тяжёлых стадий.
+ */
+const HUNGER_DISEASES = ['hypoglycemia', 'starvation', 'dehydration_disease', 'malnutrition'];
+export function capHungerSeverity(c) {
+    for (const d of c.diseases) {
+        if (!HUNGER_DISEASES.includes(d.id)) continue;
+        if (d.severity === 'severe' || d.severity === 'critical') {
+            const def = DISEASE_DB[d.id];
+            const stage = def.stages.moderate ? 'moderate' : 'mild';
+            Object.assign(d, stageFields(def, stage));
+        }
     }
 }
 
