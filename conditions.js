@@ -871,17 +871,18 @@ function evaluateEffects(c, hours, added, removed) {
         c.bacPeak = 0;
     }
 
-    // Положительные — тоже сразу, по показателям
-    T('well_fed', { on: c.satiety >= 75 && (c.reserve || 0) >= g * 0.45, off: c.satiety < 70 });
-    T('hydrated', { on: c.water >= 80, off: c.water < 75 });
-    T('high_energy', { on: c.energy >= 85, off: c.energy < 80 });
+    // Положительные эффекты — не по показателям, а события (см. applyTurnEvents):
+    // хорошо поели, напились вдоволь, выспались. «Бодрость» убрана — это дубль кольца энергии.
+    c.buffs = c.buffs.filter(b => b.id !== 'high_energy');
+    // Сытость уходит сразу, как только снова проголодался
+    if (c.satiety < 50) c.buffs = c.buffs.filter(b => b.id !== 'well_fed');
 
     // Беременность: со второго триместра голод просыпается раньше
     const pw = c.pregnant ? (c.pregnancyWeek || 0) : 0;
     T('pregnancy_appetite', { on: pw >= 14 && c.satiety <= 50, off: pw < 14 || c.satiety > 65, linger: 0 });
 
     // Эффекты с таймером (выспался, похмелье, стыд…) — просто тикают
-    for (const id of ['rested', 'hangover', 'post_meal_anxiety', 'shame',
+    for (const id of ['rested', 'well_fed', 'hydrated', 'hangover', 'post_meal_anxiety', 'shame',
         'morning_sickness', 'craving', 'heartburn', 'baby_kicks']) {
         T(id, { on: false, off: true, linger: 0 });
     }
@@ -1038,7 +1039,12 @@ export function capHungerSeverity(c) {
  */
 export function applyTurnEvents(c, ev, added = []) {
     const g = goalOf(c);
-    if ((ev.slept || 0) >= 6) grantEffect(c, 'rested', 10, added);
+    // Выспался — только после сна, который был в сцене (не за кадром на пропуске), и ненадолго
+    if ((ev.sceneSleep || 0) >= 6) grantEffect(c, 'rested', 4, added);
+    // Хорошо поели — настоящая трапеза и сытость
+    if ((ev.mealKcal || 0) >= g * 0.2 && c.satiety >= 70) grantEffect(c, 'well_fed', 3, added);
+    // Напились вдоволь
+    if ((ev.waterGain || 0) >= 20 && c.water >= 80) grantEffect(c, 'hydrated', 2, added);
     const ed = c.ed || {};
     if ((ev.mealKcal || 0) >= 150 && (ed.anorexia || ed.bulimia)) {
         grantEffect(c, 'post_meal_anxiety', ed.anorexia === 'severe' || ed.bulimia === 'severe' ? 4 : 2, added);

@@ -1,168 +1,20 @@
 // nell-nutrition/parser.js
-// Парсинг ответов ИИ: тег <!-- NN ... -->, поиск еды/питья/сна в тексте.
+// Разбор скрытого тега <!-- NN ... --> из ответа ИИ.
+// Калории еды и напитков определяет сам ИИ — базы продуктов нет.
 
-import { MEAL_CALORIES, HYDRATING_ITEMS, normalizeActivity } from './nutrition-engine.js';
-import { PRODUCT_DB } from './products.js';
+import { normalizeActivity } from './nutrition-engine.js';
 import { drinkExtras } from './effects.js';
 
-// ═══════════════════════════════════════════════════════════════
-// НОРМАЛИЗАЦИЯ И СТЕММИНГ
-// ═══════════════════════════════════════════════════════════════
 export function norm(s) {
     return String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
 }
-
-const RU_ENDINGS = [
-    'иями', 'ями', 'ами', 'ого', 'его', 'ому', 'ему', 'ыми', 'ими',
-    'ах', 'ях', 'ов', 'ев', 'ом', 'ем', 'ой', 'ей', 'ую', 'юю',
-    'ые', 'ий', 'ый', 'ая', 'яя', 'ое', 'ее',
-    'а', 'я', 'ы', 'и', 'у', 'ю', 'е', 'о', 'ь', 'й',
-];
-
-export function stemWord(word) {
-    const w = norm(word);
-    if (/^[a-z]+$/.test(w)) {
-        if (w.length > 4 && w.endsWith('es')) return w.slice(0, -2);
-        if (w.length > 3 && w.endsWith('s')) return w.slice(0, -1);
-        return w;
-    }
-    for (const e of RU_ENDINGS) {
-        if (w.length - e.length >= 3 && w.endsWith(e)) return w.slice(0, w.length - e.length);
-    }
-    return w;
-}
-
-// Прилагательные ("жареная", "тушёный", "горячее") не несут смысла блюда —
-// по ним не ищем, иначе "жареная курица" найдёт "свинину жареную".
-const ADJ_RE = /(ый|ий|ой|ая|яя|ое|ее|ые|ие|ую|юю|ого|его|ыми|ими)$/;
-function isAdjective(tok) { return tok.length > 3 && ADJ_RE.test(tok); }
 
 function tokens(name) {
     return norm(name).split(/[^\p{L}]+/u).filter(t => t.length >= 2);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ИНДЕКС ПРОДУКТОВ
-// entry: { kcal (за порцию), water (% за порцию), cal100, water100, grams, drink }
-// ═══════════════════════════════════════════════════════════════
-const EXACT = new Map();
-const STEMS = new Map();
-
-function mergeInto(map, key, data) {
-    const cur = map.get(key);
-    if (!cur) { map.set(key, { ...data }); return; }
-    for (const k of Object.keys(data)) {
-        if (cur[k] === undefined && data[k] !== undefined) cur[k] = data[k];
-    }
-}
-
-for (const p of PRODUCT_DB) {
-    const entry = {
-        name: norm(p.name),
-        kcal: Math.round(p.cal100 * p.grams / 100),
-        water: Math.round((p.water100 || 0) * p.grams / 100),
-        cal100: p.cal100,
-        water100: p.water100 || 0,
-        grams: p.grams,
-        drink: !!p.drink,
-        alco: p.cat === 'alco',
-    };
-    mergeInto(EXACT, norm(p.name), entry);
-    // Индексируем существительные из названия (не прилагательные), и только
-    // до предлога: «Рыба на костре» — это рыба, а не костёр
-    const head = norm(p.name).split(/\s(?:на|в|во|с|со|из|по|под|для|без|with|on|in|of)\s/)[0];
-    for (const t of tokens(head)) {
-        if (!isAdjective(t)) mergeInto(STEMS, stemWord(t), entry);
-    }
-}
-for (const [k, kcal] of Object.entries(MEAL_CALORIES)) {
-    const data = { name: norm(k), kcal, water: HYDRATING_ITEMS[k] ?? 0 };
-    mergeInto(EXACT, norm(k), data);
-    // Для словаря MEAL порционные ккал приоритетнее — кладём поверх
-    const s = stemWord(k);
-    const cur = STEMS.get(s);
-    if (cur) { cur.kcal = kcal; if (HYDRATING_ITEMS[k] !== undefined) cur.water = HYDRATING_ITEMS[k]; }
-    else STEMS.set(s, { ...data });
-}
-for (const [k, water] of Object.entries(HYDRATING_ITEMS)) {
-    mergeInto(EXACT, norm(k), { name: norm(k), water, drink: true });
-    mergeInto(STEMS, stemWord(k), { name: norm(k), water, drink: true });
-}
-// Словарные слова ("говядина", "вино") дополняем данными «на 100 г» из базы
-for (const [key, val] of EXACT) {
-    if (val.cal100 !== undefined) continue;
-    const src = STEMS.get(stemWord(key.split(' ')[0]));
-    if (src) {
-        for (const f of ['cal100', 'water100', 'grams', 'alco']) {
-            if (val[f] === undefined && src[f] !== undefined) val[f] = src[f];
-        }
-        if (src.drink) val.drink = true;
-    }
-}
-
-// Уменьшительные и неправильные формы → словарное слово
-const ALIAS_PREFIX = [
-    ['блинчик', 'блины'], ['блинк', 'блины'], ['пирожк', 'пирожок'], ['пирожоч', 'пирожок'], ['хлебуш', 'хлеб'], ['хлебц', 'хлебец'],
-    ['супчик', 'суп'], ['супц', 'суп'], ['кашк', 'каша'], ['кашиц', 'каша'], ['молочк', 'молоко'], ['яичк', 'яйцо'], ['яиц', 'яйцо'],
-    ['водичк', 'вода'], ['водиц', 'вода'], ['чаёк', 'чай'], ['чаек', 'чай'], ['чайк', 'чай'], ['чаю', 'чай'], ['чая', 'чай'], ['чаем', 'чай'],
-    ['кофеёк', 'кофе'], ['кофеек', 'кофе'], ['кофейк', 'кофе'], ['винц', 'вино'], ['винишк', 'вино'], ['пивк', 'пиво'], ['пивас', 'пиво'],
-    ['картошечк', 'картошка'], ['картофелин', 'картошка'], ['мясц', 'мясо'], ['мяса', 'мясо'], ['медок', 'мёд'], ['медк', 'мёд'], ['мёду', 'мёд'], ['меду', 'мёд'],
-    ['щей', 'щи'], ['ягодк', 'ягоды'], ['яблочк', 'яблоко'], ['сырок', 'сыр'], ['сырк', 'сыр'], ['колбаск', 'колбаса'], ['сосисочк', 'сосиски'],
-    ['бутербродик', 'бутерброд'], ['бутик', 'бутерброд'], ['оладуш', 'оладьи'], ['оладий', 'оладьи'], ['оладь', 'оладьи'], ['сухарик', 'сухари'],
-    ['конфетк', 'конфета'], ['шоколадк', 'шоколад'], ['печеньк', 'печенье'], ['тортик', 'торт'], ['пирожн', 'торт'], ['булк', 'булочка'],
-    ['котлетк', 'котлета'], ['курочк', 'курица'], ['рыбк', 'рыба'], ['похлёбк', 'похлёбка'], ['похлебк', 'похлёбка'], ['компотик', 'компот'],
-];
-function aliasOf(tok) {
-    for (const [pre, target] of ALIAS_PREFIX) if (tok.startsWith(pre)) return target;
-    return null;
-}
-function lookupToken(t) {
-    const a = aliasOf(t);
-    if (a) return EXACT.get(norm(a)) || STEMS.get(stemWord(a)) || null;
-    return EXACT.get(t) || STEMS.get(stemWord(t)) || null;
-}
-
-/**
- * Ищет продукт по свободному названию от ИИ.
- * @returns {Object|null}
- */
-export function lookupFood(name) {
-    const n = norm(name);
-    if (!n) return null;
-    if (EXACT.has(n)) return EXACT.get(n);
-
-    // По словам: сначала существительные, потом (если ничего) — все слова
-    const toks = tokens(n);
-    for (const pass of [toks.filter(t => !isAdjective(t)), toks]) {
-        for (const t of pass) {
-            const hit = lookupToken(t);
-            if (hit) return hit;
-        }
-    }
-
-    // Частичное совпадение — только длинные ключи, берём самый длинный
-    let best = null, bestLen = 0;
-    for (const [key, val] of EXACT) {
-        if (key.length < 5) continue;
-        if ((n.includes(key) || key.includes(n) && n.length >= 5) && key.length > bestLen) {
-            best = val; bestLen = key.length;
-        }
-    }
-    return best;
-}
-
-// Множитель порции по словам-маркерам (только когда ИИ не дал чисел)
-function portionMultiplier(name) {
-    const n = norm(name);
-    if (/(глоток|глотк|чуть|немного|пригуб|капл|кусочек|ложк|bite|sip)/.test(n)) return 0.4;
-    if (/(до отвала|вдоволь|залпом|много|фляг|кувшин|бутыл|литр|огромн|двойн|huge|double)/.test(n)) return 2.0;
-    if (/(больш|полн|кружк|бокал|миск|large|big)/.test(n)) return 1.5;
-    if (/(маленьк|стопк|рюмк|small)/.test(n)) return 0.6;
-    return 1.0;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// РАЗБОР ОДНОЙ ПОЗИЦИИ: "борщ:320", "говядина 200г", "вода:250мл", "чай (15%)"
+// РАЗБОР ПОЗИЦИИ: «борщ:450», «брага:500:350», «вода:300мл», «пирог (400 ккал)»
 // ═══════════════════════════════════════════════════════════════
 const AMOUNT_RE = /(\d+(?:[.,]\d+)?)\s*(ккал|kcal|калори\p{L}*|кал|cal|к|граммов|грамма|грамм|гр|г|g|gr|миллилитр\p{L}*|мл|ml|литр\p{L}*|л|l|%)?(?![\p{L}])/giu;
 
@@ -179,8 +31,7 @@ function unitKind(u) {
 
 function splitEntry(entry) {
     const raw = entry.trim();
-    const amounts = { kcal: null, g: null, ml: null, pct: null, bare: null };
-    // Имя — всё до первого разделителя-числа ("борщ:320", "борщ (320 ккал)", "борщ 320")
+    const amounts = { kcal: null, g: null, ml: null, pct: null, bares: [] };
     const firstNum = raw.search(/[:=(]\s*\d|\s\d+(?:[.,]\d+)?\s*(?:ккал|kcal|кал|cal|к|гр?|g|gr|мл|ml|л|l|%)?\s*\)?\s*(?:[:=(]|$)/iu);
     let name = firstNum > 0 ? raw.slice(0, firstNum) : raw;
     const rest = firstNum > 0 ? raw.slice(firstNum) : '';
@@ -193,7 +44,7 @@ function splitEntry(entry) {
         if (isNaN(v)) continue;
         const kind = unitKind(m[2]);
         if (kind === 'l') { if (amounts.ml == null) amounts.ml = v * 1000; }
-        else if (kind === 'none') { if (amounts.bare == null) amounts.bare = v; }
+        else if (kind === 'none') amounts.bares.push(v);
         else if (amounts[kind] == null) amounts[kind] = v;
     }
     return { name: name || raw, amounts };
@@ -204,79 +55,57 @@ function isEmptyValue(v) {
     return !x || /^(none|null|нет|ничего|-|—|n\/a|0)$/.test(x);
 }
 
-// Свежие овощи/фрукты (для цинги) и сомнительная еда (для отравлений) — по названию из тега
+// Свежие овощи/фрукты (для цинги) и сомнительная еда (для отравлений) — по названию
 const PRODUCE_RE = /(яблок|груш|банан|апельсин|мандарин|виноград|ягод|малин|черник|клубник|брусник|клюкв|вишн|слив|персик|абрикос|арбуз|дын|лимон|фрукт|овощ|салат|капуст|морков|огур|помидор|томат|свекл|свёкл|реп|редис|лук|чеснок|зелен|черемш|щавел|крапив|шиповник|борщ|щи|квашен|сок|морс|apple|pear|berr|fruit|vegetab|salad|orange|lemon|cabbage|carrot|onion|tomato|greens)/i;
 const RISKY_RE = /(сыр(ой|ая|ое|ые|ую)|недожар|недовар|тухл|испорч|просроч|подгнил|плесен|вчерашн|лежал|улитк|лягуш|гриб|дичь|голуб|белк|кабан|падал|raw|spoiled|rotten|mould|mold|mushroom|undercooked|stale)/i;
 // Сырая вода из природных источников
 const RISKY_WATER_RE = /(руч|рек|речн|колод|пруд|озер|озёр|луж|болот|родник|ключ|талая|снег|сыр(ая|ой) вод|некипяч|stream|river|creek|pond|lake|puddle|well|swamp|raw water|unboiled)/i;
+// Жидкие блюда немного поят
+const SOUP_RE = /(суп|борщ|щи|уха|бульон|похл[её]б|окрошк|солянк|рассольн|кисел|soup|broth|stew|chowder)/i;
 
 export function foodFlags(name) {
     const n = String(name || '');
     return { produce: PRODUCE_RE.test(n), risky: RISKY_RE.test(n) };
 }
 
+const DEFAULT_MEAL_KCAL = 400;   // если ИИ всё-таки не поставил число
+
 function parseFoodEntry(entry) {
     const { name, amounts } = splitEntry(entry);
-    const hit = lookupFood(name);
-    const mult = portionMultiplier(name);
-    const cal100 = hit?.cal100 ?? 180;
-    const water100 = hit?.water100 ?? (hit?.water ? hit.water / 2.5 : 0);
-
-    let kcal = null, water = null;
-    const kcalGiven = amounts.kcal ?? amounts.bare;
-
-    if (kcalGiven != null && kcalGiven >= 15) {
-        kcal = kcalGiven;                               // ИИ оценил порцию — доверяем
-    } else if (amounts.g != null) {
-        kcal = cal100 * amounts.g / 100;
-        water = water100 * amounts.g / 100;
-    } else if (amounts.ml != null) {                    // суп в мл
-        kcal = cal100 * amounts.ml / 100;
-        water = water100 * amounts.ml / 100;
-    } else if (kcalGiven != null && kcalGiven > 0 && kcalGiven < 15) {
-        // "яйцо 2" — это количество, а не калории
-        const q = Math.min(6, kcalGiven);
-        kcal = (hit?.kcal ?? 250) * q;
-        water = (hit?.water ?? 0) * q;
-    } else {
-        kcal = (hit?.kcal ?? 250) * mult;
-    }
-    if (water == null) water = (hit?.water ?? 0) * (amounts.g || amounts.ml || kcalGiven >= 15 ? 1 : mult);
-
+    // Калории — от ИИ: «ккал» или первое число без единиц
+    let kcal = amounts.kcal ?? amounts.bares[0] ?? null;
+    // «хлеб:2» — это количество, а не калории
+    if (kcal != null && kcal > 0 && kcal < 15) kcal = null;
+    const estimated = kcal == null;
+    if (kcal == null) kcal = DEFAULT_MEAL_KCAL;
     return {
         item: name,
         ...foodFlags(name),
-        calories: Math.max(0, Math.min(3000, Math.round(kcal))),
-        water: Math.max(0, Math.min(60, Math.round(water))),
-        estimated: kcalGiven == null && amounts.g == null && amounts.ml == null,
+        calories: Math.max(0, Math.min(4000, Math.round(kcal))),
+        water: SOUP_RE.test(name) ? 15 : 0,
+        estimated,
     };
+}
+
+// Сколько поит напиток: вода и обычное питьё ≈ 10% на 100 мл, хмельное — мало, крепкое — ничего
+function waterPer100(name) {
+    const a = drinkExtras(name, 100).alcoholG;
+    if (a >= 10) return 0;
+    if (a > 1) return 2;
+    return 10;
 }
 
 function parseDrinkEntry(entry) {
     const { name, amounts } = splitEntry(entry);
-    const hit = lookupFood(name);
-    const water100 = hit?.water100 ?? (hit?.water ? hit.water / 2.5 : 8);
-    const cal100 = hit?.cal100 ?? 0;
-
+    // «брага:500:350» — объём, потом калории; «вода:300мл»
     let ml = amounts.ml ?? amounts.g ?? null;
-    let water = null;
-
-    if (ml == null && amounts.pct != null) {
-        water = amounts.pct;
-    } else if (ml == null && amounts.bare != null) {
-        // Число без единиц: маленькое — старый формат (%), большое — мл
-        if (amounts.bare <= 60) water = amounts.bare;
-        else ml = amounts.bare;
-    }
-    if (ml == null && water == null) {
-        ml = (hit?.grams ?? 250) * portionMultiplier(name);
-    }
-    if (water == null) water = water100 * ml / 100;
-    if (ml == null) ml = water100 > 0 ? water / water100 * 100 : 250;
-
-    const kcal = amounts.kcal ?? Math.round(cal100 * ml / 100);
+    let kcal = amounts.kcal;
+    const bares = [...amounts.bares];
+    if (ml == null && bares.length) ml = bares.shift();
+    if (kcal == null && bares.length) kcal = bares.shift();
+    if (ml == null) ml = 250;
     const extras = drinkExtras(name, ml);
-
+    const water = amounts.pct ?? waterPer100(name) * ml / 100;
     return {
         item: name,
         ml: Math.round(ml),
@@ -285,10 +114,13 @@ function parseDrinkEntry(entry) {
         alcoholG: extras.alcoholG,
         caffeineMg: extras.caffeineMg,
         water: Math.max(0, Math.min(80, Math.round(water))),
-        calories: Math.max(0, Math.min(1500, Math.round(kcal))),
-        alco: !!hit?.alco,
+        calories: Math.max(0, Math.min(2000, Math.round(kcal ?? 0))),
     };
 }
+
+/** Для ручного кормления из инфоблока — те же правила, что и для тега */
+export const parseFoodItem = (entry) => parseFoodEntry(entry);
+export const parseDrinkItem = (entry) => parseDrinkEntry(entry);
 
 function parseList(raw, parser) {
     if (isEmptyValue(raw)) return [];
@@ -306,7 +138,7 @@ const TAG_RES = [
     /<!--\s*NN\b[\s:]*([\s\S]*?)-->/gi,
     /\[\s*NN\b[\s:]+([^\]\n]*)\]/gi,
 ];
-const KNOWN_KEYS = ['tp', 'date', 'time', 'user_preg', 'bot_preg', 'activity', 'user_activity', 'bot_activity', 'sleeping',
+const KNOWN_KEYS = ['tp', 'date', 'time', 'user_preg', 'bot_preg', 'user_full', 'bot_full', 'user_weight', 'bot_weight', 'activity', 'user_activity', 'bot_activity', 'sleeping',
     'user_feel', 'bot_feel', 'user_profile', 'bot_profile', 'user_state', 'bot_state', 'sleep', 'offscreen', 'ate', 'drank',
     'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care'];
 
@@ -388,6 +220,8 @@ export function parseNnInner(inner) {
         date: null,
         clock: null,            // время суток из ролплея, часы (14.5 = 14:30)
         userPreg: null, botPreg: null,   // неделя беременности (0 = не беременна)
+        userFull: null, botFull: null,   // сытость 0–100 по оценке ИИ
+        userWeight: null, botWeight: null, // { delta } или { abs } — вес изменился в истории
         userFeel: null, botFeel: null,
         userProfile: null, botProfile: null,
         userState: null, botState: null,
@@ -420,6 +254,23 @@ export function parseNnInner(inner) {
     };
     result.userPreg = preg(f.user_preg);
     result.botPreg = preg(f.bot_preg);
+    const full = (v) => {
+        const m = String(v ?? '').match(/\d+(?:[.,]\d+)?/);
+        if (!m) return null;
+        const n = parseFloat(m[0].replace(',', '.'));
+        return n >= 0 && n <= 100 ? Math.round(n) : null;
+    };
+    result.userFull = full(f.user_full);
+    result.botFull = full(f.bot_full);
+    const weight = (v) => {
+        const m = String(v ?? '').replace(/−/g, '-').match(/([+-])?\s*(\d+(?:[.,]\d+)?)/);
+        if (!m) return null;
+        const n = parseFloat(m[2].replace(',', '.'));
+        if (m[1]) return Math.abs(n) <= 40 ? { delta: m[1] === '-' ? -n : n } : null;
+        return n >= 30 && n <= 300 ? { abs: n } : null;
+    };
+    result.userWeight = weight(f.user_weight);
+    result.botWeight = weight(f.bot_weight);
     result.userFeel = clean(f.user_feel);
     result.botFeel = clean(f.bot_feel);
     result.userProfile = parseProfile(f.user_profile);

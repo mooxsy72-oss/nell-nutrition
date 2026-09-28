@@ -691,3 +691,8 @@
 /* ─── Кнопка «свернуть» в строке вкладок ─────────────────── */
 .nn-ib .nn-tab.nn-collapse { margin-left: auto; padding-left: 12px; padding-right: 12px; }
 .nn-ib .nn-tab.nn-collapse i { margin: 0; }
+
+/* ─── Покормить: форма ────────────────────────────────────── */
+.nn-feed-form { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.nn-feed-form .nn-feed-wide { grid-column: 1 / -1; }
+.nn-ib .nn-seg button i { margin-right: 4px; }

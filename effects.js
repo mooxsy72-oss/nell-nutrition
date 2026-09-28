@@ -62,8 +62,9 @@ export const EFFECT_INFO = {
             'eyes red-rimmed'],
     },
     rested: {
-        name: 'Выспался', kind: 'positive', icon: 'fa-sun', timed: true,
+        name: 'Выспался', nameF: 'Выспалась', kind: 'positive', icon: 'fa-sun', timed: true,
         text: 'Хорошо выспался: силы расходуются медленнее',
+        textF: 'Хорошо выспалась: силы расходуются медленнее',
         prompt: 'well rested — clear, steady',
     },
 
@@ -83,7 +84,7 @@ export const EFFECT_INFO = {
         name: 'Опьянение', kind: 'neutral', icon: 'fa-wine-glass', every: 3,
         text: '',
         levels: [
-            { min: 0.3, name: 'Лёгкое опьянение', kind: 'neutral', text: 'Расслаблен, разговорчив',
+            { min: 0.3, name: 'Лёгкое опьянение', kind: 'neutral', text: 'Расслаблен, разговорчив', textF: 'Расслаблена, разговорчива',
                 prompt: 'tipsy — relaxed, warmer, more talkative, slightly less filtered' },
             { min: 0.9, name: 'Опьянение', kind: 'negative', text: 'Хуже координация и суждения, вода уходит быстрее',
                 prompt: 'drunk — clumsy, loud or sentimental, poor judgement, words slur a little' },
@@ -150,13 +151,15 @@ export const EFFECT_INFO = {
 
     // ─── Положительные ───
     well_fed: {
-        name: 'Сытость', kind: 'positive', icon: 'fa-bowl-rice',
-        text: 'Сыт: силы и здоровье понемногу восстанавливаются',
+        name: 'Сытость', kind: 'positive', icon: 'fa-bowl-rice', timed: true,
+        text: 'Сыт после хорошей еды: силы и здоровье восстанавливаются',
+        textF: 'Сыта после хорошей еды: силы и здоровье восстанавливаются',
         prompt: 'well fed — steady strength and endurance',
     },
     hydrated: {
-        name: 'Гидратация', kind: 'positive', icon: 'fa-droplet',
-        text: 'Напоен: вода расходуется медленнее, здоровье крепнет',
+        name: 'Гидратация', kind: 'positive', icon: 'fa-droplet', timed: true,
+        text: 'Напился вдоволь: вода расходуется медленнее',
+        textF: 'Напилась вдоволь: вода расходуется медленнее',
         prompt: 'well hydrated — clear-headed, good stamina',
     },
     high_energy: {
@@ -173,15 +176,16 @@ export function effectLevel(e) {
 }
 
 /** Имя, тип, иконка и описание эффекта для отображения */
-export function effectView(e) {
+export function effectView(e, gender = null) {
     const info = EFFECT_INFO[e.id] || {};
     const lv = effectLevel(e);
-    const base = lv?.name || info.name || e.name || e.id;
+    const f = gender === 'female';
+    const base = lv?.name || (f && info.nameF) || info.name || e.name || e.id;
     return {
         name: e.detail ? `${base}: ${e.detail}` : base,
         kind: lv?.kind || info.kind || 'neutral',
         icon: info.icon || 'fa-circle',
-        text: lv?.text || info.text || e.effect || '',
+        text: (lv && ((f && lv.textF) || lv.text)) || (f && info.textF) || info.text || e.effect || '',
         timed: !!info.timed,
         mental: !!info.mental,
     };
@@ -265,7 +269,9 @@ const ABV = [
     [['ром', 'rum'], 0.40],
     [['ликёр', 'ликер', 'настойк', 'наливк', 'liqueur'], 0.25],
     [['вин', 'шампанск', 'глинтвейн', 'wine', 'champagne', 'mulled'], 0.12],
-    [['медовух', 'mead', 'сидр', 'cider'], 0.07],
+    [['медовух', 'mead', 'сидр', 'cider', 'браг', 'хмельн'], 0.07],
+    [['сивух'], 0.40],
+    [['кумыс'], 0.02],
     [['пив', 'эль', 'ale', 'beer', 'lager', 'стаут', 'stout'], 0.05],
     [['квас', 'kvass'], 0.012],
 ];
