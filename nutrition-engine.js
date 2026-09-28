@@ -1,4 +1,6 @@
 // nell-nutrition/nutrition-engine.js
+import { calculateBMR } from './analyzer.js';
+import { hasEffect, widmarkR } from './effects.js';
 // Модуль расчётов: расход калорий, воды, энергии по времени.
 // Болезни, баффы, дебаффы — условия появления и снятия.
 
@@ -43,16 +45,57 @@ export const DEBUFF_HEALTH_DRAIN = {
 };
 
 
+// Вес: 1 кг жировой ткани ≈ 7700 ккал
+export const KCAL_PER_KG = 7700;
+// При полном голоде тело теряет ещё воду и мышцы (кг/час)
+export const STARVING_LEAN_LOSS_PER_HOUR = 0.012;
+// ─── Активность в сцене ───
+// pal    — во сколько раз расход выше базового обмена (как MET)
+// strain — во сколько раз быстрее тратятся вода, сытость и энергия
+// Подобрано так, что день «8 ч сна + 16 ч низкой активности» ≈ сидячему
+// образу жизни (×1.2 к базовому обмену).
+export const SCENE_ACTIVITY = {
+    low:    { pal: 1.35, strain: 1.0, labelRu: 'низкая' },
+    medium: { pal: 2.8,  strain: 1.4, labelRu: 'средняя' },
+    high:   { pal: 5.5,  strain: 2.2, labelRu: 'высокая' },
+};
+export const SLEEP_PAL = 0.95;
+export const SLEEP_STRAIN = 0.5;
+
+/** Приводит любое значение активности (и старые resting/normal/active/intense) к low|medium|high */
+export function normalizeActivity(a) {
+    const x = String(a || '').toLowerCase().trim();
+    if (SCENE_ACTIVITY[x]) return x;
+    if (/^(rest|resting|idle|sit|sitting|calm|light|normal|низк|отдых|покой)/.test(x)) return 'low';
+    if (/^(mod|moderate|active|walk|walking|work|average|mid|средн|умерен|актив)/.test(x)) return 'medium';
+    if (/^(intense|hard|heavy|extreme|combat|fight|run|max|высок|интенс|тяжел)/.test(x)) return 'high';
+    return null;
+}
+
+/** Базовый обмен персонажа (ккал/сутки) + добавка на беременность */
+export function bmrOf(c) {
+    let bmr = calculateBMR(c);
+    if (c.pregnant && c.pregnancyWeek > 0) {
+        bmr += c.pregnancyWeek >= 27 ? 450 : c.pregnancyWeek >= 13 ? 340 : 100;
+    }
+    return bmr;
+}
+
+/** Расход в ккал/час при данной активности */
+export function burnPerHour(c, activity = 'low', sleeping = false) {
+    const pal = sleeping ? SLEEP_PAL : (SCENE_ACTIVITY[normalizeActivity(activity) || 'low'].pal);
+    // После нескольких дней недоедания тело экономит энергию
+    const adapt = hasEffect(c, 'slow_metabolism') ? 0.88 : 1;
+    return bmrOf(c) / 24 * pal * adapt;
+}
+
+// Алкоголь: печень выводит ~0.15‰ в час; кофеин: период полувыведения ~5 ч
+export const BAC_ELIMINATION_PER_HOUR = 0.15;
+export const CAFFEINE_HALF_LIFE = 5;
+
 // Сон восстанавливает энергию: +12%/час
 export const ENERGY_REGEN_SLEEPING = 12;
 
-// Множители активности
-export const ACTIVITY_MULTIPLIERS = {
-    resting: 0.5,
-    normal: 1.0,
-    active: 1.5,
-    intense: 2.2,
-};
 
 // Беременность увеличивает потребности
 export const PREGNANCY_MULTIPLIER = {
@@ -294,99 +337,100 @@ export const HYDRATING_ITEMS = {
 
 
 // ═══════════════════════════════════════════════════════════════
-// TICK — обработка прошедшего времени
+// МОДЕЛЬ КАЛОРИЙ
+//   calories     — съедено за текущий игровой день (сбрасывается в полночь)
+//   burned       — сожжено за текущий день
+//   reserve      — краткосрочный запас энергии (растёт от еды, тает со временем);
+//                  по нему считаются гипогликемия и голодание
+//   recentIntake — съедено «недавно» (затухает ~2ч), для переедания
 // ═══════════════════════════════════════════════════════════════
+export function goalOf(c) {
+    if (!c) return 2000;
+    return c.manualGoal ?? c.calorieGoal ?? 2000;
+}
 
 /**
- * Обновляет состояние персонажа на основе прошедших часов.
- * @param {Object} charData — объект состояния персонажа (мутируется)
- * @param {number} hours — сколько игровых часов прошло
- * @param {string} activity — resting | normal | active | intense
- * @param {boolean} sleeping — спит ли персонаж
- * @returns {Object} — { events: string[] } — что произошло (для логов)
+ * Обновляет состояние персонажа за прошедшие часы.
+ * @returns {{ events: string[] }}
  */
-export function tickTime(charData, hours, activity = 'normal', sleeping = false, goal = null) {
+export function tickTime(charData, hours, activity = 'low', sleeping = false, goal = null) {
     if (hours <= 0) return { events: [] };
     const events = [];
+    const dailyGoal = goal ?? goalOf(charData);
 
-    const actMult = ACTIVITY_MULTIPLIERS[activity] || 1.0;
+    const level = normalizeActivity(activity) || 'low';
+    const actMult = sleeping ? 1 : SCENE_ACTIVITY[level].strain;
     const pregMult = charData.pregnant ? PREGNANCY_MULTIPLIER : { calories: 1, water: 1, energy: 1 };
 
-    // ─── Модификаторы от бафов/дебафов ───
     const has = (arr, id) => Array.isArray(arr) && arr.some(x => x.id === id);
-    let energyMult = 1.0;   // скорость траты энергии
-    let waterMult = 1.0;    // скорость траты воды
-    let satietyMult = 1.0;  // скорость траты сытости
+    let energyMult = 1.0, waterMult = 1.0, satietyMult = 1.0;
 
     if (has(charData.debuffs, 'hunger'))      energyMult += 0.20;
     if (has(charData.debuffs, 'exhaustion'))  energyMult += 0.30;
     if (has(charData.debuffs, 'dehydration')) energyMult += 0.15;
     if (has(charData.debuffs, 'overeating'))  energyMult += 0.10;
-
     if (has(charData.buffs, 'well_fed'))    { energyMult -= 0.15; satietyMult -= 0.10; }
     if (has(charData.buffs, 'hydrated'))      waterMult  -= 0.10;
     if (has(charData.buffs, 'high_energy'))   energyMult -= 0.12;
+    if (hasEffect(charData, 'rested'))          energyMult -= 0.20;
+    if (hasEffect(charData, 'caffeine'))        energyMult -= 0.30;
+    if (hasEffect(charData, 'sleep_deprived'))  energyMult += 0.30;
+    if (hasEffect(charData, 'hangover'))      { energyMult += 0.30; waterMult += 0.30; }
+    if ((charData.bac || 0) >= 0.9)           { energyMult += 0.15; waterMult += 0.25; }
 
     energyMult = Math.max(0.5, energyMult);
     waterMult = Math.max(0.6, waterMult);
     satietyMult = Math.max(0.6, satietyMult);
 
-    // ─── Калории: ИНДИВИДУАЛЬНЫЙ метаболизм ───
-    const dailyGoal = goal ?? charData.calorieGoal ?? 2000;
-    const sleepMult = sleeping ? 0.65 : 1.0;
-    const calBurn = Math.round((dailyGoal / 24) * hours * actMult * sleepMult);
-    charData.calories = Math.max(0, charData.calories - calBurn);
+    // ─── Калории: базовый обмен (пол, вес, рост, возраст, мышцы) × активность ───
+    const calBurn = burnPerHour(charData, level, sleeping) * hours;
+    charData.burned = (charData.burned || 0) + calBurn;
+    const reserve = charData.reserve ?? dailyGoal * 0.5;
+    // Запаса не хватило — остаток сжигается из жира
+    const fromFat = Math.max(0, calBurn - reserve);
+    charData.reserve = Math.max(0, reserve - calBurn);
+    if (fromFat > 0) changeWeight(charData, -fromFat / KCAL_PER_KG);
+
+    // Недавно съеденное «переваривается» (период полураспада ~2ч)
+    charData.recentIntake = (charData.recentIntake || 0) * Math.pow(0.5, hours / 2);
 
     // ─── Сытость ───
     const satLoss = BASE_SATIETY_LOSS_PER_HOUR * hours * actMult * satietyMult * (sleeping ? 0.5 : 1);
-    charData.satiety = Math.max(0, Math.round(charData.satiety - satLoss));
+    charData.satiety = Math.max(0, charData.satiety - satLoss);
 
-    // ─── Вода (беременность = +потребность; вес тоже влияет) ───
+    // ─── Вода ───
     const weightMult = Math.max(0.7, Math.min(1.5, (charData.weight || 65) / 65));
     const waterLoss = BASE_WATER_LOSS_PER_HOUR * hours * actMult * pregMult.water * weightMult * waterMult * (sleeping ? 0.6 : 1);
-    charData.water = Math.max(0, Math.round(charData.water - waterLoss));
+    charData.water = Math.max(0, charData.water - waterLoss);
 
     // ─── Энергия ───
-    // ВАЖНО: energy и health теперь храним БЕЗ округления внутри тика.
-    // Округление на каждом шаге "съедало" мелкие потери (<0.5) и они
-    // никогда не накапливались. Округляем только при отображении в UI.
     if (sleeping) {
-        const energyGain = ENERGY_REGEN_SLEEPING * hours;
-        charData.energy = Math.min(100, charData.energy + energyGain);
+        charData.energy = Math.min(100, charData.energy + ENERGY_REGEN_SLEEPING * hours);
         events.push('sleep_regen');
     } else {
-        const energyLoss = BASE_ENERGY_LOSS_PER_HOUR * hours * actMult * pregMult.energy * energyMult;
-        charData.energy = Math.max(0, charData.energy - energyLoss);
+        charData.energy = Math.max(0, charData.energy - BASE_ENERGY_LOSS_PER_HOUR * hours * actMult * pregMult.energy * energyMult);
     }
 
-    // ─── Урон от болезней и дебаффов (считаем ДО решения о регене) ───
-    let diseaseHealthDrain = 0;
-    let diseaseEnergyDrain = 0;
-    if (Array.isArray(charData.diseases)) {
-        for (const d of charData.diseases) {
-            const drain = DISEASE_DRAIN[d.severity];
-            if (!drain) continue;
-            const mult = d.recovering ? 0.4 : 1; // на выздоровлении тянет слабее
-            diseaseHealthDrain += drain.health * mult;
-            diseaseEnergyDrain += drain.energy * mult;
-        }
+    // ─── Урон от болезней и дебаффов ───
+    let diseaseHealthDrain = 0, diseaseEnergyDrain = 0;
+    for (const d of (charData.diseases || [])) {
+        const drain = DISEASE_DRAIN[d.severity];
+        if (!drain) continue;
+        const mult = d.recovering ? 0.4 : 1;
+        diseaseHealthDrain += drain.health * mult;
+        diseaseEnergyDrain += drain.energy * mult;
     }
-
     let debuffHealthDrain = 0;
-    if (Array.isArray(charData.debuffs)) {
-        for (const deb of charData.debuffs) {
-            const dmg = DEBUFF_HEALTH_DRAIN[deb.id];
-            if (!dmg) continue;
-            debuffHealthDrain += deb.fading ? dmg * 0.3 : dmg; // затухающий дебафф тянет слабее
-        }
+    for (const deb of (charData.debuffs || [])) {
+        const dmg = DEBUFF_HEALTH_DRAIN[deb.id];
+        if (dmg) debuffHealthDrain += deb.fading ? dmg * 0.3 : dmg;
     }
-
     if (diseaseEnergyDrain > 0) {
         charData.energy = Math.max(0, charData.energy - diseaseEnergyDrain * hours);
     }
 
     // ─── Здоровье ───
-    const isStarving = charData.satiety <= 0 && charData.calories <= 0;
+    const isStarving = charData.satiety <= 0 && charData.reserve <= 0;
     const isDehydrated = charData.water <= 15;
     const hasHealthThreat = diseaseHealthDrain > 0 || debuffHealthDrain > 0;
 
@@ -398,376 +442,164 @@ export function tickTime(charData, hours, activity = 'normal', sleeping = false,
         charData.health = Math.max(0, charData.health - HEALTH_LOSS_PER_HOUR_DEHYDRATED * hours);
         events.push('dehydrated');
     }
-
-    // Болезни и дебаффы тянут здоровье вниз ВСЕГДА, независимо от голода/жажды
     if (diseaseHealthDrain > 0) {
         charData.health = Math.max(0, charData.health - diseaseHealthDrain * hours);
-        if (charData.diseases.some(d => !d.recovering && (d.severity === 'severe' || d.severity === 'critical'))) {
-            events.push('disease_drain');
-        }
     }
     if (debuffHealthDrain > 0) {
         charData.health = Math.max(0, charData.health - debuffHealthDrain * hours);
     }
-
-    // Регенерация — только если организм ДЕЙСТВИТЕЛЬНО в порядке:
-    // сыт, не обезвожен, бодр, и нет болезней/дебаффов, бьющих по здоровью
     if (!isStarving && !isDehydrated && !hasHealthThreat
         && charData.satiety > 30 && charData.water > 40 && charData.energy > 25) {
         charData.health = Math.min(100, charData.health + HEALTH_REGEN_PER_HOUR * hours);
     }
 
-    // ─── Бонусы от баффов: активное восстановление ───
     const BUFF_REGEN = {
-        well_fed:    { energy: 0.8, health: 0.5 },  // сытый организм восстанавливается
-        hydrated:    { energy: 0.3, health: 0.5 },  // вода — залог регенерации
-        high_energy: { health: 0.3 },               // бодрость укрепляет тело
+        well_fed:    { energy: 0.8, health: 0.5 },
+        hydrated:    { energy: 0.3, health: 0.5 },
+        high_energy: { health: 0.3 },
     };
-
-    if (Array.isArray(charData.buffs)) {
-        for (const b of charData.buffs) {
-            const regen = BUFF_REGEN[b.id];
-            if (!regen) continue;
-            if (regen.energy && !sleeping) {
-                charData.energy = Math.min(100, charData.energy + regen.energy * hours);
-            }
-            if (regen.health) {
-                charData.health = Math.min(100, charData.health + regen.health * hours);
-            }
-        }
+    for (const b of (charData.buffs || [])) {
+        const regen = BUFF_REGEN[b.id];
+        if (!regen) continue;
+        if (regen.energy && !sleeping) charData.energy = Math.min(100, charData.energy + regen.energy * hours);
+        if (regen.health) charData.health = Math.min(100, charData.health + regen.health * hours);
     }
 
-    // ─── Смерть от истощения/жажды ───
-    if (charData.health <= 0) {
-        events.push('dying');
-    }
+    if (charData.health <= 0) events.push('dying');
 
-    // ─── Потеря веса при длительном голоде ───
-    if (isStarving && hours >= 4) {
-        const weightLoss = 0.05 * hours;
-        charData.weight = Math.max(30, +(charData.weight - weightLoss).toFixed(1));
+    if (isStarving) {
+        changeWeight(charData, -STARVING_LEAN_LOSS_PER_HOUR * hours);
         events.push('weight_loss');
     }
 
     charData.hoursSinceLastMeal = (charData.hoursSinceLastMeal || 0) + hours;
 
+    // ─── Алкоголь, кофеин, электролиты, часы без сна ───
+    charData.bac = Math.max(0, (charData.bac || 0) - BAC_ELIMINATION_PER_HOUR * hours);
+    charData.caffeine = (charData.caffeine || 0) * Math.pow(0.5, hours / CAFFEINE_HALF_LIFE);
+    if (charData.caffeine < 5) charData.caffeine = 0;
+    charData.electrolyte = Math.max(0, (charData.electrolyte || 0) - 1.5 * hours);
+    if (sleeping) {
+        charData.sleepStreak = (charData.sleepStreak || 0) + hours;
+        if (charData.sleepStreak >= 3) charData.hoursAwake = 0;
+    } else {
+        charData.sleepStreak = 0;
+        charData.hoursAwake = (charData.hoursAwake || 0) + hours;
+    }
+    // Самый долгий пост — для пищевой тревожности
+    charData.maxFastHours = Math.max(charData.maxFastHours || 0, charData.hoursSinceLastMeal);
+
     return { events };
 }
 
-
 // ═══════════════════════════════════════════════════════════════
-// EATING & DRINKING
+// ЕДА И ПИТЬЁ
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// ВЕС
+// Запас энергии (reserve) работает как буфер: обычное питание его
+// колеблет, не трогая вес. Всё, что не влезло в полный запас,
+// откладывается в вес; всё, что сожжено при пустом запасе, уходит из веса.
+// ═══════════════════════════════════════════════════════════════
+export function reserveCap(goal) { return goal * 1.25; }
 
-/**
- * Применяет приём пищи к состоянию персонажа.
- * @param {Object} charData
- * @param {number} calories — сколько ккал съедено
- * @param {number} waterGain — сколько % воды восстановлено (0 если еда без жидкости)
- * @returns {Object} — { overfed: boolean }
- */
-export function applyMeal(charData, calories, waterGain = 0) {
-    charData.calories += calories;
-    charData.hoursSinceLastMeal = 0;
-    charData.lastMealTime = Date.now();
+export function changeWeight(charData, kg) {
+    if (!kg) return;
+    charData.weight = Math.max(30, Math.round(((charData.weight || 65) + kg) * 1000) / 1000);
+}
 
-    // Сытость: +1% за каждые 15 ккал, максимум +60% за один приём
-    const satGain = Math.min(60, Math.round(calories / 15));
-    charData.satiety = Math.min(100, charData.satiety + satGain);
-
-    // Энергия: немного восстанавливается от еды
-    const energyGain = Math.min(15, Math.round(calories / 50));
-    charData.energy = Math.min(100, charData.energy + energyGain);
-
-    // Вода
-    if (waterGain > 0) {
-        charData.water = Math.min(100, charData.water + waterGain);
+function storeEnergy(charData, kcal, goal) {
+    const cap = reserveCap(goal);
+    const next = (charData.reserve || 0) + kcal;
+    if (next > cap) {
+        changeWeight(charData, (next - cap) / KCAL_PER_KG);
+        charData.reserve = cap;
+    } else {
+        charData.reserve = next;
     }
-
-    // Переедание
-    const overfed = charData.calories > charData.calorieGoal * 1.3;
-    return { overfed };
 }
 
 /**
- * Применяет питьё.
- * @param {Object} charData
- * @param {number} waterGain — % воды
+ * Применяет приём пищи (все блюда хода одной суммой).
+ * @returns {{ overfed: boolean }}
  */
-export function applyDrink(charData, waterGain) {
-    charData.water = Math.min(100, charData.water + waterGain);
-}
+export function applyMeal(charData, calories, waterGain = 0, goal = null) {
+    const g = goal ?? goalOf(charData);
+    const cal = Math.max(0, calories || 0);
+    if (cal <= 0 && waterGain <= 0) return { overfed: false };
 
-// ═══════════════════════════════════════════════════════════════
-// CONDITIONS — проверка и обновление болезней/баффов/дебаффов
-// ═══════════════════════════════════════════════════════════════
+    charData.calories = (charData.calories || 0) + cal;
+    storeEnergy(charData, cal, g);
+    charData.recentIntake = (charData.recentIntake || 0) + cal;
+
+    // Сытость зависит от нормы: для нормы 2000 обед в 600 ккал ≈ +39%
+    // При анорексии чувство переполненности наступает раньше
+    const earlyFull = charData.ed?.anorexia ? 1.3 : 1;
+    const satGain = Math.min(85, cal / g * 130 * earlyFull);
+    const overflow = charData.satiety + satGain - 100;
+    charData.satiety = Math.min(100, Math.round(charData.satiety + satGain));
+
+    // Перекус сокращает «часы без еды» частично, полноценный приём — обнуляет
+    const mealSize = g * 0.12;
+    if (cal >= mealSize) {
+        charData.hoursSinceLastMeal = 0;
+    } else if (cal > 0) {
+        charData.hoursSinceLastMeal = (charData.hoursSinceLastMeal || 0) * (1 - cal / mealSize);
+    }
+    if (cal > 0) charData.lastMealTime = Date.now();
+
+    charData.energy = Math.min(100, charData.energy + Math.min(12, cal / 60));
+    if (waterGain > 0) charData.water = Math.min(100, charData.water + waterGain);
+
+    return { overfed: overflow > 10 };
+}
 
 /**
- * Проверяет состояние персонажа и добавляет/снимает условия.
- * Вызывается после каждого tickTime.
- * @param {Object} charData
- * @returns {Object} — { added: string[], removed: string[] }
+ * Применяет напиток. Калорийные напитки (сок, молоко, пиво) немного насыщают.
  */
-export function updateConditions(charData) {
-    const added = [];
-    const removed = [];
-
-    // ─── ДЕБАФФЫ ───
-
-    // Голод
-    if (charData.satiety <= 20 && charData.hoursSinceLastMeal >= 6) {
-        if (!charData.debuffs.find(d => d.id === 'hunger')) {
-            charData.debuffs.push({
-                id: 'hunger', name: 'Hunger', icon: '🍽',
-                effect: '-20% Energy',
-                effects: ['Energy Recovery -20%', 'Concentration -15%'],
-            });
-            added.push('hunger');
-        }
-    } else {
-        if (charData.debuffs.find(d => d.id === 'hunger')) {
-            charData.debuffs = charData.debuffs.filter(d => d.id !== 'hunger');
-            removed.push('hunger');
-        }
+export function applyDrink(charData, waterGain, calories = 0, goal = null, extras = {}) {
+    const g = goal ?? goalOf(charData);
+    if (extras.alcoholG > 0) {
+        // Формула Уидмарка: промилле = граммы спирта / (вес × доля воды в теле)
+        const add = extras.alcoholG / ((charData.weight || 65) * widmarkR(charData.gender));
+        charData.bac = (charData.bac || 0) + add;
+        charData.bacPeak = Math.max(charData.bacPeak || 0, charData.bac);
     }
-
-    // Обезвоживание
-    if (charData.water <= 25) {
-        if (!charData.debuffs.find(d => d.id === 'dehydration')) {
-            charData.debuffs.push({
-                id: 'dehydration', name: 'Dehydration', icon: '💧',
-                effect: '-15% Stamina',
-                effects: ['Stamina -15%', 'Focus -10%'],
-            });
-            added.push('dehydration');
-        }
-    } else if (charData.water > 35) {
-        if (charData.debuffs.find(d => d.id === 'dehydration')) {
-            charData.debuffs = charData.debuffs.filter(d => d.id !== 'dehydration');
-            removed.push('dehydration');
-        }
+    if (extras.caffeineMg > 0) charData.caffeine = (charData.caffeine || 0) + extras.caffeineMg;
+    charData.water = Math.min(100, charData.water + Math.max(0, waterGain || 0));
+    if (calories > 0) {
+        charData.calories = (charData.calories || 0) + calories;
+        storeEnergy(charData, calories, g);
+        charData.recentIntake = (charData.recentIntake || 0) + calories * 0.5;
+        charData.satiety = Math.min(100, Math.round(charData.satiety + Math.min(20, calories / g * 60)));
     }
+}
 
-    // Истощение энергии
-    if (charData.energy <= 15) {
-        if (!charData.debuffs.find(d => d.id === 'exhaustion')) {
-            charData.debuffs.push({
-                id: 'exhaustion', name: 'Exhaustion', icon: '😴',
-                effect: '-30% All Actions',
-                effects: ['Physical Actions -30%', 'Mental Focus -25%'],
-            });
-            added.push('exhaustion');
-        }
-    } else if (charData.energy > 30) {
-        if (charData.debuffs.find(d => d.id === 'exhaustion')) {
-            charData.debuffs = charData.debuffs.filter(d => d.id !== 'exhaustion');
-            removed.push('exhaustion');
-        }
-    }
-
-    // Переедание
-    if (charData.calories > charData.calorieGoal * 1.4) {
-        if (!charData.debuffs.find(d => d.id === 'overeating')) {
-            charData.debuffs.push({
-                id: 'overeating', name: 'Overeating', icon: '🤢',
-                effect: '-10% Energy',
-                effects: ['Sluggishness', 'Energy -10%'],
-            });
-            added.push('overeating');
-        }
-    } else {
-        if (charData.debuffs.find(d => d.id === 'overeating')) {
-            charData.debuffs = charData.debuffs.filter(d => d.id !== 'overeating');
-            removed.push('overeating');
-        }
-    }
-
-    // Сонливость (низкая энергия, но не критичная)
-    if (charData.energy <= 30 && charData.energy > 15) {
-        if (!charData.debuffs.find(d => d.id === 'drowsiness')) {
-            charData.debuffs.push({
-                id: 'drowsiness', name: 'Drowsiness', icon: '💤',
-                effect: '-10% Focus',
-                effects: ['Focus -10%', 'Reaction Time -10%'],
-            });
-            added.push('drowsiness');
-        }
-    } else {
-        if (charData.debuffs.find(d => d.id === 'drowsiness')) {
-            charData.debuffs = charData.debuffs.filter(d => d.id !== 'drowsiness');
-            removed.push('drowsiness');
-        }
-    }
-
-    // ─── БАФФЫ ───
-
-    // Сытость (хорошо поел)
-    if (charData.satiety >= 75 && charData.calories >= charData.calorieGoal * 0.6) {
-        if (!charData.buffs.find(b => b.id === 'well_fed')) {
-            charData.buffs.push({
-                id: 'well_fed', name: 'Well Fed', icon: '🍲',
-                effect: '+15% Energy',
-            });
-            added.push('well_fed');
-        }
-    } else {
-        if (charData.buffs.find(b => b.id === 'well_fed')) {
-            charData.buffs = charData.buffs.filter(b => b.id !== 'well_fed');
-            removed.push('well_fed');
-        }
-    }
-
-    // Хорошая гидратация
-    if (charData.water >= 80) {
-        if (!charData.buffs.find(b => b.id === 'hydrated')) {
-            charData.buffs.push({
-                id: 'hydrated', name: 'Well Hydrated', icon: '💧',
-                effect: '+10% Stamina',
-            });
-            added.push('hydrated');
-        }
-    } else if (charData.water < 65) {
-        if (charData.buffs.find(b => b.id === 'hydrated')) {
-            charData.buffs = charData.buffs.filter(b => b.id !== 'hydrated');
-            removed.push('hydrated');
-        }
-    }
-
-    // Высокая энергия
-    if (charData.energy >= 85) {
-        if (!charData.buffs.find(b => b.id === 'high_energy')) {
-            charData.buffs.push({
-                id: 'high_energy', name: 'High Energy', icon: '⚡',
-                effect: '+12% Stamina',
-            });
-            added.push('high_energy');
-        }
-    } else if (charData.energy < 70) {
-        if (charData.buffs.find(b => b.id === 'high_energy')) {
-            charData.buffs = charData.buffs.filter(b => b.id !== 'high_energy');
-            removed.push('high_energy');
-        }
-    }
-
-    // ─── БОЛЕЗНИ ───
-
-    // Гипогликемия — калории на нуле + голод > 12 часов
-    if (charData.calories <= 0 && charData.hoursSinceLastMeal >= 12) {
-        if (!charData.diseases.find(d => d.id === 'hypoglycemia')) {
-            charData.diseases.push({
-                id: 'hypoglycemia', name: 'Hypoglycemia',
-                severity: charData.hoursSinceLastMeal >= 24 ? 'severe' : 'moderate',
-                effects: ['Dizziness', 'Weakness', 'Tremor', 'Confusion'],
-                since: `Since ${Math.round(charData.hoursSinceLastMeal)}h`,
-            });
-            added.push('hypoglycemia');
-        } else {
-            // Обновить severity
-            const d = charData.diseases.find(d => d.id === 'hypoglycemia');
-            if (charData.hoursSinceLastMeal >= 24) d.severity = 'severe';
-            if (charData.hoursSinceLastMeal >= 48) d.severity = 'critical';
-            d.since = `Since ${Math.round(charData.hoursSinceLastMeal)}h`;
-        }
-    } else if (charData.calories > 100 && charData.satiety > 30) {
-        if (charData.diseases.find(d => d.id === 'hypoglycemia')) {
-            charData.diseases = charData.diseases.filter(d => d.id !== 'hypoglycemia');
-            removed.push('hypoglycemia');
-        }
-    }
-
-    // Обезвоживание (болезнь) — вода ниже 10%
-    if (charData.water <= 10) {
-        if (!charData.diseases.find(d => d.id === 'severe_dehydration')) {
-            charData.diseases.push({
-                id: 'severe_dehydration', name: 'Severe Dehydration',
-                severity: charData.water <= 5 ? 'critical' : 'severe',
-                effects: ['Organ Stress', 'Confusion', 'Fainting Risk', 'Muscle Cramps'],
-                since: 'Critical',
-            });
-            added.push('severe_dehydration');
-        }
-    } else if (charData.water > 20) {
-        if (charData.diseases.find(d => d.id === 'severe_dehydration')) {
-            charData.diseases = charData.diseases.filter(d => d.id !== 'severe_dehydration');
-            removed.push('severe_dehydration');
-        }
-    }
-
-    // Истощение (болезнь) — голод > 36 часов
-    if (charData.hoursSinceLastMeal >= 36 && charData.calories <= 0) {
-        if (!charData.diseases.find(d => d.id === 'starvation')) {
-            charData.diseases.push({
-                id: 'starvation', name: 'Starvation',
-                severity: charData.hoursSinceLastMeal >= 72 ? 'critical' : 'severe',
-                effects: ['Muscle Loss -15%', 'Weight Loss', 'Immune Weakness', 'Cognitive Decline'],
-                since: `Since ${Math.round(charData.hoursSinceLastMeal)}h`,
-            });
-            added.push('starvation');
-        } else {
-            const d = charData.diseases.find(d => d.id === 'starvation');
-            if (charData.hoursSinceLastMeal >= 72) d.severity = 'critical';
-            d.since = `Since ${Math.round(charData.hoursSinceLastMeal)}h`;
-        }
-    } else if (charData.satiety > 40 && charData.calories > 200) {
-        if (charData.diseases.find(d => d.id === 'starvation')) {
-            charData.diseases = charData.diseases.filter(d => d.id !== 'starvation');
-            removed.push('starvation');
-        }
-    }
-
-    return { added, removed };
+/**
+ * Рвота: теряется часть недавно съеденного, вода и электролиты.
+ */
+export function applyVomit(charData) {
+    const lost = Math.min((charData.recentIntake || 0) * 0.5, charData.reserve || 0);
+    charData.reserve = Math.max(0, (charData.reserve || 0) - lost);
+    charData.calories = Math.max(0, (charData.calories || 0) - lost);
+    charData.recentIntake = (charData.recentIntake || 0) * 0.4;
+    charData.satiety = Math.max(0, charData.satiety - 30);
+    charData.water = Math.max(0, charData.water - 10);
+    charData.health = Math.max(0, charData.health - 2);
+    charData.electrolyte = Math.min(100, (charData.electrolyte || 0) + 25);
+    charData.bac = (charData.bac || 0) * 0.85;
+    return Math.round(lost);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// OVERALL STATUS (для промпта)
+// ОБЩИЙ СТАТУС
 // ═══════════════════════════════════════════════════════════════
 export function getPhysicalStatus(charData) {
+    charData = { ...charData, diseases: charData.diseases.filter(d => !['food_obsession', 'hunger_apathy', 'food_insecurity'].includes(d.id)) };
     if (charData.diseases.some(d => d.severity === 'critical')) return 'critical';
     if (charData.diseases.some(d => d.severity === 'severe')) return 'severe';
     if (charData.diseases.length > 0 || charData.health < 40) return 'poor';
     if (charData.debuffs.length > 0 || charData.satiety < 30 || charData.water < 30) return 'stressed';
     if (charData.health > 70 && charData.energy > 60) return 'healthy';
     return 'stable';
-}
-// ═══════════════════════════════════════════════════════════════
-// WEIGHT CHANGE — набор/потеря веса
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Обновляет вес на основе дневного баланса калорий.
- * Вызывается при смене «игрового дня» (когда tp > 16 часов или новый день).
- * Правило: +3500 ккал сверх нормы = +0.5 кг, -3500 = -0.5 кг (упрощённо).
- * @param {Object} charData
- * @param {number} dayCalories — калории за прошедший «день»
- * @returns {{ gained: number, lost: number }}
- */
-export function updateWeight(charData, dayCalories) {
-    const surplus = dayCalories - charData.calorieGoal;
-    let change = 0;
-
-    if (surplus > 500) {
-        // Переедание — набор веса
-        change = (surplus / 3500) * 0.5;
-        charData.weight = +(charData.weight + change).toFixed(1);
-        return { gained: +change.toFixed(2), lost: 0 };
-    } else if (surplus < -800) {
-        // Сильный дефицит — потеря (уже обрабатывается в tickTime при голоде)
-        // Здесь дополнительная потеря за дефицит без полного голодания
-        change = (Math.abs(surplus) / 7000) * 0.3;
-        charData.weight = Math.max(30, +(charData.weight - change).toFixed(1));
-        return { gained: 0, lost: +change.toFixed(2) };
-    }
-
-    return { gained: 0, lost: 0 };
-}
-
-/**
- * Сброс дневных калорий (вызывается при смене дня).
- * @param {Object} charData
- * @returns {number} — калории за прошедший день (до сброса)
- */
-export function resetDailyCalories(charData) {
-    const prev = charData.calories;
-    charData.calories = 0;
-    return prev;
 }

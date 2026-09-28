@@ -1,226 +1,132 @@
-// nell-nutrition/index.js — FULL REWRITE v2
+// nell-nutrition/index.js — v3
+// Инфоблок питания в конце каждого ответа бота + расчёт физиологии.
 
 import {
     chat, chat_metadata, this_chid, characters,
     setExtensionPrompt, extension_prompt_types, extension_prompt_roles,
     saveChatDebounced, name1,
 } from '../../../../script.js';
-
 import { eventSource, event_types } from '../../../../scripts/events.js';
-
 import { power_user } from '../../../../scripts/power-user.js';
 
 import {
-    tickTime, applyMeal, applyDrink,
-    getPhysicalStatus, updateWeight, resetDailyCalories,
-    MEAL_CALORIES, HYDRATING_ITEMS,
-    ACTIVITY_MULTIPLIERS, PREGNANCY_MULTIPLIER,
+    tickTime, applyMeal, applyDrink, applyVomit, goalOf, reserveCap,
+    SCENE_ACTIVITY, bmrOf, burnPerHour,
 } from './nutrition-engine.js';
-
+import { parseNnTag, detectFromText, detectActivity, parseGameTime } from './parser.js';
 import {
-    parseNnTag, detectFromText, parseGameTime,
-} from './parser.js';
-
-import {
-    notify, queueNotify, flushQueue, setSilent,
+    notify, queueNotify, flushQueue, setSilent, setToastsEnabled, clearQueue,
 } from './notifications.js';
-
 import {
-    evaluateConditions, buildConditionPrompt,
+    evaluateConditions, buildConditionPrompt, updateFocus,
     getPregnancyStage, calculateImmunity, DISEASE_DB,
+    applyTurnEvents, checkRefeeding, edList, ED_DB, ED_SEV_LABEL, ED_GUIDANCE,
 } from './conditions.js';
-
+import { EFFECT_INFO, effectView, drinkExtras, grantEffect } from './effects.js';
 import {
     ACTIVITY_LEVELS, BUILD_TYPES, calculateCalorieGoal,
     buildCharacterParams, analyzeInitialState,
 } from './analyzer.js';
-
 import { PRODUCT_DB, PRODUCT_CATEGORIES } from './products.js';
 
 // ═══════════════════════════════════════════════════════════════
-// THEMES
+// НАСТРОЙКИ (localStorage — общие для всех чатов)
 // ═══════════════════════════════════════════════════════════════
-const THEME_LS_KEY = 'nellNutrition_theme'; // 'violet' | 'rose' | 'adaptive'
-const BG_LS_KEY = 'nellNutrition_bgImage';  // имя файла картинки в папке icons
-const BG_OVERLAY_LS_KEY = 'nellNutrition_bgOverlay'; // 0–100 затемнение фона
-
-// Список доступных фонов в папке icons — впиши сюда имена своих файлов
-const BG_PRESETS = ['фон1.jpg', 'фон2.jpg', 'фон3.jpg', 'фон4.jpg', 'фон5.jpg'];
-
-
-// SVG-яблоко (красится через currentColor — само подстраивается под тему)
-const NN_APPLE_SVG = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none"
-    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0 0 17 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 0 0-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06Z"/>
-    <path d="M10 2c1 .5 2 2 2 5"/>
-</svg>`;
-
-function getTheme() {
-    return localStorage.getItem(THEME_LS_KEY) || 'violet';
-}
-
-function applyTheme(theme) {
-    localStorage.setItem(THEME_LS_KEY, theme);
-    const targets = [
-        document.getElementById('nn-card'),
-        document.getElementById('nn-minibar'),
-        document.getElementById('nn-toggle'),
-        document.getElementById('nn-notify-container'),
-    ];
-    for (const el of targets) {
-        if (el) el.setAttribute('data-nn-theme', theme);
-    }
-    // Подсветить активную точку-переключатель
-    document.querySelectorAll('.nn-theme-dot').forEach(d => {
-        d.classList.toggle('nn-theme-dot-active', d.dataset.theme === theme);
-    });
-    applyCardBackground();
-}
-
-// Фоновая картинка карточки (лежит в папке icons расширения)
-function applyCardBackground() {
-    const card = document.getElementById('nn-card');
-    if (!card) return;
-
-    // Если пользователь ничего не вписал — используем bg.jpg по умолчанию
-    const saved = localStorage.getItem(BG_LS_KEY);
-    const bg = (saved && saved.trim() !== '') ? saved.trim() : 'bg.jpg';
-    const overlay = parseInt(localStorage.getItem(BG_OVERLAY_LS_KEY) ?? '55');
-
-    if (bg && bg.toLowerCase() !== 'none') {
-        const url = `/scripts/extensions/third-party/nell-nutrition/icons/${bg}`;
-        card.style.setProperty('--nn-bg-image', `url('${url}')`);
-        card.style.setProperty('--nn-bg-overlay', (overlay / 100).toFixed(2));
-        card.classList.add('nn-has-bg');
-    } else {
-        card.style.removeProperty('--nn-bg-image');
-        card.style.removeProperty('--nn-bg-overlay');
-        card.classList.remove('nn-has-bg');
-    }
-}
-
-
-// Точки-переключатели тем в шапке карточки
-function buildThemeSwitcher() {
-    const right = document.querySelector('#nn-card .nn-header-right');
-    if (!right || right.querySelector('.nn-theme-switcher')) return;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'nn-theme-switcher';
-    wrap.innerHTML = `
-        <button class="nn-theme-dot nn-dot-violet" data-theme="violet" title="Тёмно-фиолетовая"></button>
-        <button class="nn-theme-dot nn-dot-rose" data-theme="rose" title="Бело-розовая"></button>
-        <button class="nn-theme-dot nn-dot-adaptive" data-theme="adaptive" title="Адаптивная (тема таверны)"></button>
-    `;
-    right.insertBefore(wrap, right.firstChild);
-
-    wrap.querySelectorAll('.nn-theme-dot').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            applyTheme(btn.dataset.theme);
-        });
-    });
-}
-
-// ═══════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════
-const MODULE = 'nellNutrition';
 const META_KEY = 'nellNutritionState';
 const PROMPT_KEY = 'nell_nutrition_state';
-const ENABLED_LS_KEY = 'nellNutrition_enabled';
-const POS_LS_KEY = 'nellNutrition_cardPos';
-const PINNED_LS_KEY  = 'nellNutrition_pinned';// карточка закреплена
-const COMPACT_LS_KEY = 'nellNutrition_compact';  // компактный режим
-const COMPACT_LAYOUT_LS_KEY = 'nellNutrition_compactLayout'; // 'vertical' | 'horizontal'
-
-function isPinned(){ return localStorage.getItem(PINNED_LS_KEY)  ==='true'; }
-function isCompact() { return localStorage.getItem(COMPACT_LS_KEY) === 'true'; }
-
-// Русские названия всех состояний по их внутренним id (для уведомлений)
-const NN_ID_NAMES = {
-    // болезни
-    hypoglycemia: 'Гипогликемия',
-    dehydration_disease: 'Обезвоживание',
-    starvation: 'Истощение (голод)',
-    malnutrition: 'Недоедание',
-    // дебаффы
-    hunger: 'Голод',
-    dehydration: 'Жажда',
-    exhaustion: 'Истощение',
-    drowsiness: 'Сонливость',
-    overeating: 'Переедание',
-    // баффы
-    well_fed: 'Сытость',
-    hydrated: 'Гидратация',
-    high_energy: 'Бодрость',
-    balanced: 'Баланс',
+const LS = {
+    enabled: 'nellNutrition_enabled',
+    toasts: 'nellNutrition_toasts',
+    scope: 'nellNutrition_scope',          // 'all' | 'last'
+    expand: 'nellNutrition_expandLast',    // раскрывать блок последнего ответа
 };
+const lsGet = (k, d) => { const v = localStorage.getItem(k); return v === null ? d : v; };
+const isEnabled = () => lsGet(LS.enabled, 'true') !== 'false';
+const toastsOn = () => lsGet(LS.toasts, 'true') !== 'false';
+const scopeAll = () => lsGet(LS.scope, 'all') === 'all';
+const expandLast = () => lsGet(LS.expand, 'false') === 'true';
+
+// Названия и иконки состояний берутся из баз болезней и эффектов
+const nameOf = (id) => DISEASE_DB[id]?.nameRu || EFFECT_INFO[id]?.name || id;
+const isMentalDisease = (id) => DISEASE_DB[id]?.category === 'mental';
+const SEV_LABEL = { mild: 'лёгкая', moderate: 'средняя', severe: 'тяжёлая', critical: 'критическая' };
+const ACT_LABEL = { low: 'низкая', medium: 'средняя', high: 'высокая',
+    resting: 'низкая', normal: 'низкая', active: 'средняя', intense: 'высокая' };
+const ACT_ICON = { low: 'fa-couch', medium: 'fa-person-walking', high: 'fa-person-running' };
+
+// Поля профиля — их не откатываем при свайпе/удалении (это правки пользователя)
+const PROFILE_FIELDS = ['gender', 'age', 'height', 'build', 'activity',
+    'manualGoal', 'calorieGoal', 'pregnant', 'pregnancyWeek', 'ed'];
+
+function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const r0 = (n) => Math.round(n || 0);
 
 // ═══════════════════════════════════════════════════════════════
-// ENABLE / DISABLE
+// АВАТАРКИ
+// personas.js подгружаем динамически: если в какой-то версии таверны
+// его нет или он устроен иначе, расширение всё равно запустится.
 // ═══════════════════════════════════════════════════════════════
-function isEnabled() {
-    return localStorage.getItem(ENABLED_LS_KEY) !== 'false';
+let personasMod = null;
+import('../../../personas.js').then(m => { personasMod = m; scheduleRenderAll(); }).catch(() => {});
+
+function getUserAvatar() {
+    const file = personasMod?.user_avatar;
+    if (file) return { src: `/thumbnail?type=persona&file=${encodeURIComponent(file)}`, fallback: `/User Avatars/${encodeURIComponent(file)}` };
+    const img = document.querySelector('#user_avatar_block .avatar-container.selected img, #user_avatar_block .avatar.selected img, #chat .mes[is_user="true"] .avatar img');
+    return img?.src ? { src: img.src, fallback: '' } : null;
 }
 
-function setEnabled(val) {
-    localStorage.setItem(ENABLED_LS_KEY, val ? 'true' : 'false');
-    const chk = document.getElementById('nn-chk-enabled');
-    if (chk) chk.checked = val;
-    const chk2 = document.getElementById('nn-set-enabled');
-    if (chk2) chk2.checked = val;
-    if (!val) {
-        setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 2, true, extension_prompt_roles.SYSTEM);
-    } else {
-        injectPrompt();
+function getBotAvatar() {
+    const bot = getCurrentBot();
+    if (bot?.avatar && bot.avatar !== 'none') {
+        return { src: `/thumbnail?type=avatar&file=${encodeURIComponent(bot.avatar)}`, fallback: `/characters/${encodeURIComponent(bot.avatar)}` };
     }
-    renderMiniBar();
-    renderCard();
+    const img = document.querySelector('#chat .mes:not([is_user="true"]) .avatar img');
+    return img?.src ? { src: img.src, fallback: '' } : null;
 }
 
+function avatarHtml(who, cls) {
+    const a = who === 'bot' ? getBotAvatar() : getUserAvatar();
+    if (!a) return `<span class="nn-av ${cls} nn-av-empty"><i class="fa-solid fa-user"></i></span>`;
+    return `<img class="nn-av ${cls}" src="${esc(a.src)}" data-fallback="${esc(a.fallback)}" alt="" loading="lazy" draggable="false">`;
+}
 
 // ═══════════════════════════════════════════════════════════════
-// STATE MANAGEMENT
+// СОСТОЯНИЕ ЧАТА
 // ═══════════════════════════════════════════════════════════════
 let state = null;
 
 function defaultCharState(name = '', charId = '') {
     return {
-        charId,
-        name,
-        // Физические параметры (влияют на норму калорий)
-        gender: 'unknown',
-        age: 28,
-        height: 170,       // см
-        weight: 65,        // кг
-        build: 'average',  // slim | average | athletic | muscular | heavy
-        activity: 'light', // sedentary | light | moderate | active | very_active
+        charId, name,
+        gender: 'unknown', age: 28, height: 170, weight: 65,
+        build: 'average', activity: 'light',
+        calorieGoal: 2000, manualGoal: null,
 
-        // Норма калорий: если manualGoal != null — используется он (ручной ввод)
-        calorieGoal: 2000,
-        manualGoal: null,
+        calories: 0,        // съедено за игровой день
+        burned: 0,          // сожжено за игровой день
+        reserve: 1000,      // краткосрочный запас энергии
+        recentIntake: 0,    // недавно съеденное (для переедания)
+        water: 80, satiety: 75, energy: 75, health: 100,
 
-        // Текущее состояние
-        calories: 0,
-        water: 80,
-        satiety: 75,
-        energy: 75,
-        health: 100,
+        pregnant: false, pregnancyWeek: 0,
+        ed: {},                 // РПП: { anorexia, bulimia, binge } → null | mild | moderate | severe
+        diseases: [], buffs: [], debuffs: [],
 
-        pregnant: false,
-        pregnancyWeek: 0,
+        bac: 0, bacPeak: 0,     // алкоголь в крови, ‰
+        caffeine: 0,            // кофеин, мг
+        electrolyte: 0,         // «долг» электролитов после рвоты
+        hoursAwake: 0, sleepStreak: 0,
+        maxFastHours: 0, starvationTrauma: false,
 
-        diseases: [],
-        buffs: [],
-        debuffs: [],
+        lastMealTime: null, hoursSinceLastMeal: 0, daysWithDeficit: 0,
+        dayStartWeight: null,  // вес на начало игрового дня
+        salience: {}, focus: [], focusCue: {},
 
-        lastMealTime: null,
-        hoursSinceLastMeal: 0,
-        daysWithDeficit: 0,
-
-        analyzed: false,       // применён ли анализ карточки
-        initialAnalyzed: false, // применён ли анализ первой сцены
+        analyzed: false, initialAnalyzed: false,
     };
 }
 
@@ -228,2926 +134,1614 @@ function defaultState() {
     return {
         user: defaultCharState('User', 'user'),
         characters: [],
+        clockHours: null,       // игровые часы с 00:00 первого дня
+        turn: 0,
         lastGameTime: null,
-        lastProcessedMsgId: null,
         history: [],
-        note: '',
-        snapshots: [],
-        dayCount: 1,        // счётчик игровых дней
-        weightHistory: [],  // история веса
-        version: 2,
+        weightHistory: [],
+        snapshots: [],          // { beforeMsg, ... } — состояние ДО обработки ответа
+        manualLog: [],          // ручное кормление, привязанное к ответу
+        version: 3,
     };
 }
 
-
-// ═══════════════════════════════════════════════════════════════
-// МИГРАЦИЯ старых английских лейблов
-// ═══════════════════════════════════════════════════════════════
-const LABEL_MIGRATION = {
-    'Well Fed': 'Сытость', 'Well Hydrated': 'Гидратация',
-    'High Energy': 'Бодрость', 'Balanced Diet': 'Баланс',
-    'Hunger': 'Голод', 'Dehydration': 'Жажда',
-    'Exhaustion': 'Истощение', 'Drowsiness': 'Сонливость',
-    'Overeating': 'Переедание', 'Vitamin Boost': 'Витамины',
-};
-
-function migrateLabels(charData) {
-    if (!charData) return;
-    for (const arr of [charData.buffs, charData.debuffs]) {
-        if (!Array.isArray(arr)) continue;
-        for (const item of arr) {
-            if (LABEL_MIGRATION[item.name]) item.name = LABEL_MIGRATION[item.name];
-            if (item.effect) {
-                item.effect = item.effect
-                    .replace(/Stamina/gi, 'Стамина')
-                    .replace(/Energy/gi, 'Энергия')
-                    .replace(/Health/gi, 'Здоровье')
-                    .replace(/Immunity/gi, 'Иммунитет')
-                    .replace(/Focus/gi, 'Фокус');
-            }
-        }
-    }
+function fillChar(c) {
+    const def = defaultCharState();
+    for (const k of Object.keys(def)) if (c[k] === undefined) c[k] = clone(def[k]);
+    for (const k of ['diseases', 'buffs', 'debuffs']) if (!Array.isArray(c[k])) c[k] = [];
+    c.diseases = c.diseases.filter(d => DISEASE_DB[d.id]);
 }
 
 function loadState() {
     try {
-        if (!chat_metadata[META_KEY]) {
-            chat_metadata[META_KEY] = defaultState();
-        }
+        if (!chat_metadata[META_KEY]) chat_metadata[META_KEY] = defaultState();
         state = chat_metadata[META_KEY];
         const def = defaultState();
-        for (const k of Object.keys(def)) {
-            if (state[k] === undefined) state[k] = def[k];
-        }
-        const defChar = defaultCharState();
-        for (const k of Object.keys(defChar)) {
-            if (state.user[k] === undefined) state.user[k] = defChar[k];
-        }
-        if (!Array.isArray(state.history)) state.history = [];
-        if (!Array.isArray(state.snapshots)) state.snapshots = [];
-        if (!state.dayCount) state.dayCount = 1;
-        if (!Array.isArray(state.weightHistory)) state.weightHistory = [];
-        if (!Array.isArray(state.user.diseases)) state.user.diseases = [];
-        if (!Array.isArray(state.user.buffs)) state.user.buffs = [];
-        if (!Array.isArray(state.user.debuffs)) state.user.debuffs = [];
+        for (const k of Object.keys(def)) if (state[k] === undefined) state[k] = def[k];
 
-        // Чистим старые болезни с устаревшим id
-        state.user.diseases = state.user.diseases.filter(d =>
-            ['hypoglycemia','dehydration_disease','starvation','malnutrition'].includes(d.id)
-        );
-
-        migrateLabels(state.user);
-        for (const c of (state.characters || [])) {
-            const defChar2 = defaultCharState();
-            for (const k of Object.keys(defChar2)) {
-                if (c[k] === undefined) c[k] = defChar2[k];
+        // Миграция с v2: калории раньше были «чистым балансом»
+        if ((state.version || 2) < 3) {
+            for (const c of [state.user, ...(state.characters || [])]) {
+                if (!c) continue;
+                const g = goalOf(c);
+                c.reserve = Math.round(Math.min(g, Math.max(0, c.calories || 0)) || g * 0.5 * (c.satiety ?? 60) / 100);
+                c.burned = 0; c.recentIntake = 0;
             }
-            if (!Array.isArray(c.diseases)) c.diseases = [];
-            if (!Array.isArray(c.buffs)) c.buffs = [];
-            if (!Array.isArray(c.debuffs)) c.debuffs = [];
-            c.diseases = c.diseases.filter(d =>
-                ['hypoglycemia','dehydration_disease','starvation','malnutrition'].includes(d.id)
-            );
-            migrateLabels(c);
+            state.snapshots = [];
+            if (state.clockHours == null) state.clockHours = ((state.dayCount || 1) - 1) * 24 + 12;
+            state.version = 3;
         }
 
-        if (!state.user.analyzed) {
-            analyzeUser();
-        }
+        state.snapshots = (state.snapshots || []).filter(s => s && s.beforeMsg !== undefined);
+        for (const k of ['history', 'weightHistory', 'manualLog']) if (!Array.isArray(state[k])) state[k] = [];
+        fillChar(state.user);
+        state.user.name = getUserName();
+        for (const c of state.characters) fillChar(c);
 
+        if (!state.user.analyzed) analyzeUser();
         ensureBotState();
         analyzeInitialSceneOnce();
-
+        // Вес на начало дня фиксируем уже после анализа карточек
+        for (const c of [state.user, ...state.characters]) if (c.dayStartWeight == null) c.dayStartWeight = c.weight;
     } catch (err) {
-        console.warn('[NN] loadState failed, resetting to default:', err);
+        console.warn('[NN] loadState failed, resetting:', err);
         chat_metadata[META_KEY] = defaultState();
         state = chat_metadata[META_KEY];
-        try { analyzeUser(); } catch(e) {}
-        try { ensureBotState(); } catch(e) {}
+        try { analyzeUser(); ensureBotState(); analyzeInitialSceneOnce(); } catch (e) { /* пусто */ }
     }
 }
 
 function saveState() {
     chat_metadata[META_KEY] = state;
     saveChatDebounced();
-    renderMiniBar();
-    renderCard();
 }
 
-// ─── ФИНАЛЬНАЯ НОРМА КАЛОРИЙ (ручная или расчётная) ───
-function effectiveGoal(charData) {
-    if (charData.manualGoal != null) return charData.manualGoal;
-    return charData.calorieGoal || 2000;
-}
+const effectiveGoal = (c) => goalOf(c);
 
-// ─── ПЕРЕСЧЁТ НОРМЫ по текущим параметрам ───
-function recalcGoal(charData) {
-    charData.calorieGoal = calculateCalorieGoal({
-        gender: charData.gender,
-        weight: charData.weight,
-        height: charData.height,
-        age: charData.age,
-        activity: charData.activity,
-        build: charData.build,
-        pregnant: charData.pregnant,
-        pregnancyWeek: charData.pregnancyWeek,
+function recalcGoal(c) {
+    c.calorieGoal = calculateCalorieGoal({
+        gender: c.gender, weight: c.weight, height: c.height, age: c.age,
+        activity: c.activity, build: c.build, pregnant: c.pregnant, pregnancyWeek: c.pregnancyWeek,
     });
 }
 
-// ═══════════════════════════════════════════════════════════════
-// АНАЛИЗ ПЕРСОНЫ ЮЗЕРА
-// ═══════════════════════════════════════════════════════════════
-function getPersonaDescription() {
-    try {
-        return power_user?.persona_description || '';
-    } catch { return ''; }
-}
-
-function analyzeUser() {
-    const desc = getPersonaDescription();
-    const name = getUserName();
-    const combined = `${name} ${desc}`;
-
-    if (combined.trim().length > 3) {
-        const params = buildCharacterParams(combined);
-        state.user.gender = params.gender;
-        state.user.age = params.age;
-        state.user.height = params.height;
-        state.user.weight = params.weight;
-        state.user.build = params.build;
-        state.user.activity = params.activity;
-        if (state.user.manualGoal == null) {
-            state.user.calorieGoal = params.calorieGoal;
-        }
-    }
-    state.user.analyzed = true;
-}
-
-// ─── BOT STATE ────────────────────────────────────────────────
+// ─── Персонажи ────────────────────────────────────────────────
+const getUserName = () => name1 || 'User';
 function getCurrentBot() {
     if (this_chid === undefined || !characters[this_chid]) return null;
     return characters[this_chid];
+}
+const getBotName = () => getCurrentBot()?.name || 'Bot';
+function botCardText(bot) {
+    return `${bot.name} ${bot.description || ''} ${bot.personality || ''} ${bot.first_mes || ''}`;
+}
+
+function analyzeUser() {
+    let desc = '';
+    try { desc = power_user?.persona_description || ''; } catch { /* пусто */ }
+    const combined = `${getUserName()} ${desc}`;
+    if (combined.trim().length > 3) {
+        const p = buildCharacterParams(combined);
+        Object.assign(state.user, {
+            gender: p.gender, age: p.age, height: p.height, weight: p.weight,
+            build: p.build, activity: p.activity,
+        });
+        if (!edList(state.user).length) state.user.ed = { ...p.ed };
+        if (state.user.manualGoal == null) state.user.calorieGoal = p.calorieGoal;
+    }
+    state.user.analyzed = true;
 }
 
 function ensureBotState() {
     const bot = getCurrentBot();
     if (!bot) return null;
     const id = bot.avatar || bot.name;
-    let existing = state.characters.find(c => c.charId === id);
-
-    if (!existing) {
-        existing = defaultCharState(bot.name, id);
-        // Анализ карточки бота
-        const cardText = `${bot.name} ${bot.description || ''} ${bot.personality || ''} ${bot.first_mes || ''}`;
-        const params = buildCharacterParams(cardText);
-        existing.gender = params.gender;
-        existing.age = params.age;
-        existing.height = params.height;
-        existing.weight = params.weight;
-        existing.build = params.build;
-        existing.activity = params.activity;
-        existing.calorieGoal = params.calorieGoal;
-        existing.analyzed = true;
-        state.characters.push(existing);
+    let c = state.characters.find(x => x.charId === id);
+    if (!c) {
+        c = defaultCharState(bot.name, id);
+        const p = buildCharacterParams(botCardText(bot));
+        Object.assign(c, {
+            gender: p.gender, age: p.age, height: p.height, weight: p.weight,
+            build: p.build, activity: p.activity, calorieGoal: p.calorieGoal, analyzed: true,
+            ed: { ...p.ed },
+        });
+        state.characters.push(c);
     }
-
-    // Миграция недостающих полей
-    const defChar = defaultCharState();
-    for (const k of Object.keys(defChar)) {
-        if (existing[k] === undefined) existing[k] = defChar[k];
-    }
-    existing.name = bot.name;
-    return existing;
+    fillChar(c);
+    c.name = bot.name;
+    return c;
 }
 
 function getBotState() {
     const bot = getCurrentBot();
-    if (!bot) return null;
+    if (!bot || !state) return null;
     const id = bot.avatar || bot.name;
     return state.characters.find(c => c.charId === id) || null;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// АНАЛИЗ ПЕРВОЙ СЦЕНЫ (стартовая сытость/вода/энергия)
-// ═══════════════════════════════════════════════════════════════
+function activeChars() {
+    const list = [{ who: 'user', data: state.user, name: getUserName() }];
+    const b = getBotState();
+    if (b) list.push({ who: 'bot', data: b, name: getBotName() });
+    return list;
+}
+
+// Стартовое состояние по первой сцене
 function analyzeInitialSceneOnce() {
-    // Берём первое НЕ-юзерское сообщение (приветствие персонажа)
-    let firstBotMsg = null;
-    for (const m of chat) {
-        if (m && !m.is_user && m.mes) { firstBotMsg = m.mes; break; }
-    }
-    if (!firstBotMsg) {
-        // Пробуем first_mes из карточки
-        const bot = getCurrentBot();
-        firstBotMsg = bot?.first_mes || '';
-    }
-    if (!firstBotMsg) return;
-
-    const est = analyzeInitialState(firstBotMsg);
-
-    if (!state.user.initialAnalyzed) {
-        state.user.satiety = est.satiety;
-        state.user.water = est.water;
-        state.user.energy = est.energy;
-        // Стартовые калории пропорциональны сытости
-        state.user.calories = Math.round(effectiveGoal(state.user) * (est.satiety / 100) * 0.5);
-        state.user.initialAnalyzed = true;
-    }
-
-    const botData = getBotState();
-    if (botData && !botData.initialAnalyzed) {
-        botData.satiety = est.satiety;
-        botData.water = est.water;
-        botData.energy = est.energy;
-        botData.calories = Math.round(effectiveGoal(botData) * (est.satiety / 100) * 0.5);
-        botData.initialAnalyzed = true;
-    }
-}
-
-// ─── PERSONA / AVATAR HELPERS ─────────────────────────────────
-function getUserAvatar() {
-    const selectors = [
-        '#user_avatar_block .avatar.selected img',
-        '#user_avatar_block .avatar_img.selected',
-        '.selected_avatar img',
-        '#avatar_img_me',
-    ];
-    for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el) {
-            const src = el.src || el.style?.backgroundImage?.replace(/url\(['"]?|['"]?\)/g, '');
-            if (src && src !== '' && !src.includes('undefined')) return src;
-        }
-    }
-    const userMsg = document.querySelector('.mes[is_user="true"] .avatar img');
-    if (userMsg?.src) return userMsg.src;
-    return '';
-}
-
-function getBotAvatar() {
-    const bot = getCurrentBot();
-    if (!bot) return '';
-    if (bot.avatar) return `/characters/${bot.avatar}`;
-    const botMsg = document.querySelector('.mes:not([is_user="true"]) .avatar img');
-    if (botMsg?.src) return botMsg.src;
-    return '';
-}
-
-function getUserName() {
-    return name1 || 'User';
-}
-
-function getBotName() {
-    const bot = getCurrentBot();
-    return bot?.name || 'Bot';
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-// UI: TOGGLE BUTTON
-// ═══════════════════════════════════════════════════════════════
-function buildToggleButton() {
-    if (document.getElementById('nn-toggle')) return;
-
-    const btn = document.createElement('button');
-    btn.id = 'nn-toggle';
-    btn.title = 'Nutrition';
-    btn.innerHTML = `<span class="nn-toggle-icon">${NN_APPLE_SVG}</span>`;
-
-    const sendBut = document.getElementById('send_but');
-    if (sendBut) {
-        sendBut.insertAdjacentElement('afterend', btn);
-    } else {
-        const form = document.getElementById('rightSendForm');
-        if (form) form.appendChild(btn);
-        else document.body.appendChild(btn);
-    }
-
-    btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleCard();
-    });
-
-    btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        toggleCard();
-    });
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-// UI: MINI BAR (above input field)
-// ═══════════════════════════════════════════════════════════════
-// SVG-иконки мини-бара (красятся через CSS)
-const NN_ICO_APPLE = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0 0 17 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 0 0-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06Z"/><path d="M10 2c1 .5 2 2 2 5"/></svg>`;
-const NN_ICO_FORK = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>`;
-const NN_ICO_DROP = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
-
-function buildMiniBar() {
-    if (document.getElementById('nn-minibar')) return;
-
-    const bar = document.createElement('div');
-    bar.id = 'nn-minibar';
-    bar.innerHTML = `
-        <div class="nn-mini-char" id="nn-mini-user">
-            <span class="nn-mini-name" id="nn-mini-user-name">User</span>
-            <span class="nn-mini-stat"><span class="nn-mini-ico nn-ico-cal">${NN_ICO_APPLE}</span> <b id="nn-mini-user-cal">—</b></span>
-            <span class="nn-mini-stat" id="nn-mini-user-sat"><span class="nn-mini-ico nn-ico-sat">${NN_ICO_FORK}</span> <b>—</b></span>
-            <span class="nn-mini-stat" id="nn-mini-user-water"><span class="nn-mini-ico nn-ico-water">${NN_ICO_DROP}</span> <b>—</b></span>
-            <span class="nn-mini-fx" id="nn-mini-user-fx"></span>
-        </div>
-        <div class="nn-mini-divider"></div>
-        <div class="nn-mini-char" id="nn-mini-bot">
-            <span class="nn-mini-name" id="nn-mini-bot-name">Bot</span>
-            <span class="nn-mini-stat"><span class="nn-mini-ico nn-ico-cal">${NN_ICO_APPLE}</span> <b id="nn-mini-bot-cal">—</b></span>
-            <span class="nn-mini-stat" id="nn-mini-bot-sat"><span class="nn-mini-ico nn-ico-sat">${NN_ICO_FORK}</span> <b>—</b></span>
-            <span class="nn-mini-stat" id="nn-mini-bot-water"><span class="nn-mini-ico nn-ico-water">${NN_ICO_DROP}</span> <b>—</b></span>
-            <span class="nn-mini-fx" id="nn-mini-bot-fx"></span>
-        </div>
-    `;
-
-    const form = document.getElementById('form_sheld') || document.getElementById('rightSendForm');
-    if (form) {
-        form.insertAdjacentElement('beforebegin', bar);
-    } else {
-        document.body.appendChild(bar);
-    }
-}
-
-function renderMiniBar() {
-    if (!state) return;
-    const bar = document.getElementById('nn-minibar');
-    if (!bar) return;
-
-    if (!isEnabled()) {
-        bar.classList.add('nn-hidden');
-        return;
-    }
-    bar.classList.remove('nn-hidden');
-
-    // ── Юзер ──
-    const u = state.user;
-    const uGoal = effectiveGoal(u);
-    nnSetMiniText('nn-mini-user-name', getUserName());
-    nnSetMiniText('nn-mini-user-cal', `${u.calories}/${uGoal}`);
-    nnSetMiniStat('nn-mini-user-sat', u.satiety, `${u.satiety}%`);
-    nnSetMiniStat('nn-mini-user-water', u.water, `${u.water}%`);
-    nnSetMiniFx('nn-mini-user-fx', u);
-
-    // ── Бот ──
-    const b = getBotState();
-    const botBlock = document.getElementById('nn-mini-bot');
-    const divider = bar.querySelector('.nn-mini-divider');
-    if (b) {
-        if (botBlock) botBlock.style.display = '';
-        if (divider) divider.style.display = '';
-        const bGoal = effectiveGoal(b);
-        nnSetMiniText('nn-mini-bot-name', getBotName());
-        nnSetMiniText('nn-mini-bot-cal', `${b.calories}/${bGoal}`);
-        nnSetMiniStat('nn-mini-bot-sat', b.satiety, `${b.satiety}%`);
-        nnSetMiniStat('nn-mini-bot-water', b.water, `${b.water}%`);
-        nnSetMiniFx('nn-mini-bot-fx', b);
-    } else {
-        if (botBlock) botBlock.style.display = 'none';
-        if (divider) divider.style.display = 'none';
-    }
-}
-
-// Хелперы мини-панели
-function nnSetMiniText(id, text) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = text;
-}
-// Компактные значки эффектов: ✦бафы ☠дебафы 🦠болезни
-function nnSetMiniFx(id, data) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    let html = '';
-    if (data.buffs.length) html += `<span class="nn-fx-buff">✦${data.buffs.length}</span>`;
-    if (data.debuffs.length) html += `<span class="nn-fx-debuff">☠${data.debuffs.length}</span>`;
-    if (data.diseases.length) html += `<span class="nn-fx-disease">🦠${data.diseases.length}</span>`;
-    el.innerHTML = html;
-    el.style.display = html ? '' : 'none';
-}
-
-// Устанавливает значение в <b> внутри блока + красит по уровню
-function nnSetMiniStat(id, value, text) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const b = el.querySelector('b');
-    if (b) b.textContent = text;
-    el.classList.remove('nn-mini-good', 'nn-mini-warn', 'nn-mini-danger');
-    if (value > 60) el.classList.add('nn-mini-good');
-    else if (value > 30) el.classList.add('nn-mini-warn');
-    else el.classList.add('nn-mini-danger');
-}
-
-// ═══════════════════════════════════════════════════════════════
-// UI: MAIN CARD — BUILD DOM
-// ═══════════════════════════════════════════════════════════════
-let cardOpen = false;
-let activeTab = 'overview';
-
-function buildCard() {
-    if (document.getElementById('nn-card')) return;
-
-    const card = document.createElement('div');
-    card.id = 'nn-card';
-    card.className = 'nn-hidden';
-    card.innerHTML = `
-        <!-- HEADER -->
-        <div class="nn-header">
-            <div class="nn-header-left">
-                <span class="nn-header-title">Калории и питание</span>
-                <span class="nn-header-sparkle">✦</span>
-            </div>
-            <div class="nn-header-right">
-                <button class="nn-header-btn nn-layout-only" id="nn-btn-layout" title="Повернуть карточки">⇄</button><button class="nn-header-btn" id="nn-btn-compact" title="Компактный режим">⊞</button>
-                <button class="nn-header-btn" id="nn-btn-pin"title="Закрепить карточку">📌</button>
-                <button class="nn-header-btn" id="nn-btn-help"    title="Help">?</button>
-                <button class="nn-header-btn" id="nn-btn-close"   title="Close">✕</button>
-            </div>
-        </div>
-
-        <!-- TABS -->
-        <div class="nn-tabs">
-            <button class="nn-tab nn-tab-active" data-tab="overview">Обзор</button>
-            <button class="nn-tab" data-tab="weight">Вес</button>
-            <button class="nn-tab" data-tab="products">Продукты</button>
-            <button class="nn-tab" data-tab="settings">Настройки</button>
-        </div>
-
-        <!-- BODY -->
-        <div class="nn-body" id="nn-body">
-            <!-- Content rendered dynamically -->
-        </div>
-    `;
-
-    // Wrapper
-    let wrapper = document.getElementById('nn-card-wrapper');
-    if (!wrapper) {
-        wrapper = document.createElement('div');
-        wrapper.id = 'nn-card-wrapper';
-        document.body.appendChild(wrapper);
-    }
-    wrapper.appendChild(card);
-    wrapper.style.display = 'none';
-
-    // Events
-    document.getElementById('nn-btn-close').addEventListener('click', () => setCard(false));
-    document.getElementById('nn-btn-help').addEventListener('click', (e) => {
-        e.stopPropagation();
-        openHelpModal();
-    });
-    // Кнопка пина
-    const btnPin = document.getElementById('nn-btn-pin');
-    if (btnPin) {
-        btnPin.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const val = !isPinned();
-            localStorage.setItem(PINNED_LS_KEY, val ? 'true' : 'false');
-            const card = document.getElementById('nn-card');
-            if (card) card.classList.toggle('nn-pinned', val);
-            btnPin.classList.toggle('nn-btn-active', val);
-            // Включить/выключить авто-закрытие
-            if (val) {
-                document.removeEventListener('pointerdown', onOutsideClick, true);
-            } else {
-                document.addEventListener('pointerdown', onOutsideClick, true);
-            }
-        });
-        // Восстановить состояние при открытии
-        btnPin.classList.toggle('nn-btn-active', isPinned());
-    }
-
-    // Кнопка компактного режима
-    const btnCompact = document.getElementById('nn-btn-compact');
-    if (btnCompact) {
-        btnCompact.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const val = !isCompact();
-            localStorage.setItem(COMPACT_LS_KEY, val ? 'true' : 'false');
-            const card = document.getElementById('nn-card');
-            if (card) card.classList.toggle('nn-compact', val);
-            btnCompact.classList.toggle('nn-btn-active', val);
-            renderCard();
-        });
-        btnCompact.classList.toggle('nn-btn-active', isCompact());
-    }
-
-    // Кнопка поворота (только в compact)
-    const btnLayout = document.getElementById('nn-btn-layout');
-    if (btnLayout) {
-        const _syncLayoutIcon = () => {
-            const cur = localStorage.getItem(COMPACT_LAYOUT_LS_KEY) || 'vertical';
-            btnLayout.textContent = cur === 'horizontal' ? '⇅' : '⇄';
-            btnLayout.title = cur === 'horizontal' ?'Вертикальный порядок' : 'Горизонтальный порядок';
-        };
-        btnLayout.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const cur = localStorage.getItem(COMPACT_LAYOUT_LS_KEY) || 'vertical';
-            localStorage.setItem(COMPACT_LAYOUT_LS_KEY, cur === 'vertical' ? 'horizontal' : 'vertical');
-            _syncLayoutIcon();
-            renderCard();
-        });
-        _syncLayoutIcon();
-    }
-
-    // Tabs
-    card.querySelectorAll('.nn-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            activeTab = tab.dataset.tab;
-            card.querySelectorAll('.nn-tab').forEach(t => t.classList.remove('nn-tab-active'));
-            tab.classList.add('nn-tab-active');
-            renderCardBody();
-        });
-    });
-    
-    // Drag (desktop only)
-    makeDraggable(card, null);
-}
-//═══════════════════════════════════════════════════════════════
-// HELP MODAL
-// ═══════════════════════════════════════════════════════════════
-function buildHelpModal() {
-    if (document.getElementById('nn-help-overlay')) return;
-
-    const overlay = document.createElement('div');
-    overlay.id = 'nn-help-overlay';
-    overlay.className = 'nn-hidden';
-
-    overlay.innerHTML = `
-    <div id="nn-help-modal">
-        <div class="nn-help-header">
-            <div class="nn-help-header-left">
-                <span class="nn-help-section-icon">🍎</span>
-                <span class="nn-help-title">Справка —<span class="nn-help-title-accent">Калории и питание</span></span>
-            </div>
-            <button class="nn-help-close" id="nn-help-close-btn">✕</button>
-        </div>
-
-        <div class="nn-help-body">
-
-            <!--──ЧТОЭТО ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">💡</span>
-                    <span class="nn-help-section-title">Что это такое?</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">Это расширение добавляет в ролевую игру <b>живую физиологию</b> — все приемы пищи персоны
-                        и бота теперь отслеживаются. ИИ сам подсчитывает и обновляет показатели автоматически.
-                    </p>
-                    <p class="nn-help-p">
-                        Расширение отслеживает <b>пять параметров</b> для каждого персонажа:
-                    </p>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">🍽</span>
-                        <span class="nn-help-row-name">Калории</span>
-                        <span class="nn-help-row-desc">Сколько энергии получено с едой за сегодня. Падает со временем.</span>
-                    </div>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">🥄</span>
-                        <span class="nn-help-row-name">Сытость</span>
-                        <span class="nn-help-row-desc">Насколько персонаж сыт прямо сейчас. Падает быстрее калорий.</span>
-                    </div>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">💧</span>
-                        <span class="nn-help-row-name">Вода</span>
-                        <span class="nn-help-row-desc">Уровень гидратации. Ниже 30% — головная боль, ниже 15% — опасно.</span>
-                    </div>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">⚡</span>
-                        <span class="nn-help-row-name">Энергия</span>
-                        <span class="nn-help-row-desc">Бодрость. Растёт во сне, падает при активности и голоде.</span>
-                    </div>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">❤</span>
-                        <span class="nn-help-row-name">Здоровье</span>
-                        <span class="nn-help-row-desc">Медленно восстанавливается само, если всё хорошо. Падает от болезней и голода.</span>
-                    </div>
-                </div>
-            </div><div class="nn-help-divider"></div>
-
-            <!-- ── КАК ОТКРЫТЬ ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">🖱</span>
-                    <span class="nn-help-section-title">Как открыть карточку</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                        Рядом с кнопкой отправки сообщения появилась кнопка
-                        <span class="nn-help-btn-mock">🍎</span> — нажми её, чтобы открыть
-                        полную карточку питания.
-                    </p>
-                    <p class="nn-help-p">
-                        Над полемввода сообщений находится <b>мини-бар</b> — краткая сводка калорий,
-                        сытости и воды для обоих персонажей. Нажми на него — тоже откроется карточка.
-                    </p>
-                    <div class="nn-help-tip">
-                        <span class="nn-help-tip-icon">📌</span>
-                        <span>Кнопка <b>📌</b> в шапке карточки закрепляет её на экране — она перестанет
-                        закрываться при клике мимо. Удобно, если хочешь следить за показателями во время игры.Карточку можно перетащить за края или углы.</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="nn-help-divider"></div>
-
-            <!-- ── ВКЛАДКА ОБЗОР ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">📊</span>
-                    <span class="nn-help-section-title">Вкладка «Обзор»</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                        Здесь видны карточки <b>твоего персонажа</b> и <b>персонажа ИИ</b> рядом.
-                        На каждой — норма калорий, заполненность баров и общий статус здоровья.
-                    </p>
-                    <p class="nn-help-p">
-                        Кнопка <span class="nn-help-btn-mock">⚙</span> в правом верхнем углу каждой
-                        карточки открывает редактор параметров — можно задать пол, возраст, рост,
-                        вес, уровень активности, телосложение, беременность и вручную установить
-                        норму калорий. Расширение пытается определить всё это из карточки персонажа
-                        автоматически, но если что-то не так — поправь здесь.
-                    </p>
-                    <p class="nn-help-p">Ниже карточек — три панели: <b>Состояния</b> (болезни),
-                        <b>Баффы</b> (положительные эффекты) и <b>Дебаффы</b> (отрицательные).
-                    </p>
-                </div>
-            </div>
-
-            <div class="nn-help-divider"></div>
-
-            <!-- ── БАФФЫ / ДЕБАФФЫ / БОЛЕЗНИ ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">⚠</span>
-                    <span class="nn-help-section-title">Баффы, дебаффы и болезни</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                <b>Баффы</b> <span style="color:var(--nn-green-bright)">✦</span> — появляются,
-                        когда персонаж в хорошей форме. Например, «Сытость» даёт бонус к энергии,
-                        «Гидратация» ускоряет восстановление. Они исчезают сами, если показатели упадут.
-                    </p>
-                    <p class="nn-help-p">
-                        <b>Дебаффы</b> <span style="color:var(--nn-orange-bright)">☠</span> — появляются
-                        при низких показателях. Голод, жажда, сонливость, истощение — каждый штрафует
-                        определённые действия в нарративе ИИ. Проходят постепенно после того, как
-                        причина устранена (поел, попил, поспал).
-                    </p>
-                    <p class="nn-help-p">
-                        <b>Болезни</b> <span style="color:var(--nn-red-bright)">🦠</span> — серьёзнее.
-                        Гипогликемия, обезвоживание, истощение от голода и недоедание появляются при
-                        длительном пренебрежении едой или водой. Имеют стадии от «лёгкой» до «критической».
-                        Для выздоровления нужно устранить причину и подождать — мгновенно не проходят.
-                    </p><div class="nn-help-tip">
-                        <span class="nn-help-tip-icon">💬</span>
-                        <span>Все состояния <b>автоматически передаются ИИ</b> — он обязан отыгрывать
-                        симптомы в тексте. Если персонаж голодает — ИИ покажет дрожь в руках,
-                        головокружение, слабость и т.д.</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="nn-help-divider"></div>
-
-            <!-- ── ПРОДУКТЫ ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">🍽</span>
-                    <span class="nn-help-section-title">Вкладка «Продукты»</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                        Здесь можно <b>покормить персонажа вручную</b>, не дожидаясь, пока это
-                        произойдёт в сцене. Выбери категорию, найди продукт, нажми на него —
-                        появится панель с граммовкой. Подбери нужное количество и нажми «Съесть»
-                        или «Выпить». Важно: это не обязательная вкладка, всегда можно просто написать в ответе боту, что ест твой персонаж, и аи автоматически высчитает калорийность.
-                    </p>
-                    <p class="nn-help-p">
-                        Кнопки вверху справа позволяют выбрать,
-                        <b>кого</b> хотите покормить — бота или юзера.</p>
-                </div>
-            </div>
-
-            <div class="nn-help-divider"></div>
-
-            <!-- ── ВЕС ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">⚖</span>
-                    <span class="nn-help-section-title">Вкладка «Вес»</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                        Вес персонажа меняется со временем. Когда ИИ сообщает, что прошло много
-                        игрового времени (≥16 часов), расширение считает «игровой день» и пересчитывает вес:</p>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">📈</span>
-                        <span class="nn-help-row-name">Набор</span>
-                        <span class="nn-help-row-desc">Если съедено заметно больше нормы — небольшой прирост.</span>
-                    </div>
-                    <div class="nn-help-row">
-                        <span class="nn-help-row-icon">📉</span>
-                        <span class="nn-help-row-name">Потеря</span>
-                        <span class="nn-help-row-desc">Сильный дефицит калорий или голодание — вес постепенно снижается.</span>
-                    </div>
-                    <p class="nn-help-p" style="margin-top:4px">
-                        Здесь же хранится вся история изменений с причинами и датами.</p>
-                </div>
-            </div>
-
-            <div class="nn-help-divider"></div>
-
-            <!-- ── НАСТРОЙКИ ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">🎨</span>
-                    <span class="nn-help-section-title">Вкладка «Настройки»</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                        <b>Тема оформления</b> — три варианта:тёмно-фиолетовая, бело-розовая, и адаптивная (подстраивается под текущую
-                        тему SillyTavern). Переключить можно также тремя точками в шапке карточки.
-                    </p>
-                    <p class="nn-help-p">
-                        <b>Свой фон</b> — можно положить любую картинку в папку
-                        <code>extensions/third-party/nell-nutrition/icons/</code>
-                        и вписать её имя (например<code>myfon.jpg</code>).Ползунок рядом
-                        регулирует затемнение, чтобы текст оставался читаемым. Чтобы убрать фон —
-                        впиши <code>none</code>.
-                    </p>
-                    <p class="nn-help-p">
-                        <b>Компактный режим</b> <span class="nn-help-btn-mock">⊞</span> — уменьшает
-                        карточку, убирает вкладки и оставляет только самое важное. Кнопка
-                        <span class="nn-help-btn-mock">⇄</span> меняет расположение карточек
-                        персонажей — вертикально или горизонтально.
-                    </p>
-                </div>
-            </div>
-
-            <div class="nn-help-divider"></div>
-
-            <!-- ── КАК РАБОТАЕТ АВТОМАТИКА ── -->
-            <div class="nn-help-section">
-                <div class="nn-help-section-header">
-                    <span class="nn-help-section-icon">🤖</span>
-                    <span class="nn-help-section-title">Как всё работает само</span>
-                </div>
-                <div class="nn-help-section-body">
-                    <p class="nn-help-p">
-                        После каждого ответа ИИ расширение читает скрытый тег в конце сообщения —
-                        ИИ туда пишет, сколько игрового времени прошло, что съели и выпили.Ты этого не видишь, но именно так показатели обновляются автоматически.
-                    </p>
-                    <p class="nn-help-p">
-                        Если ИИ забыл тег — расширение само попытается найти упоминания еды
-                        и питья в тексте.
-                    </p>
-                    <div class="nn-help-tip">
-                        <span class="nn-help-tip-icon">🔄</span>
-                        <span>Если удалить сообщение ИИ — показатели <b>автоматически откатятся</b>
-                        к состоянию до этого сообщения.</span>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-
-        <div class="nn-help-footer">
-            Nutrition Framework · нажми в любом месте за пределами окна, чтобы закрыть
-        </div>
-    </div>`;
-
-    document.body.appendChild(overlay);
-
-    document.getElementById('nn-help-close-btn').addEventListener('click', () => {
-        overlay.classList.add('nn-hidden');
-    });
-
-    overlay.addEventListener('pointerdown', (e) => {
-        if (e.target === overlay) overlay.classList.add('nn-hidden');
-    });
-}
-
-function openHelpModal() {
-    const overlay = document.getElementById('nn-help-overlay');
-    if (overlay) {
-        overlay.classList.remove('nn-hidden');
-    }
-}
-function toggleCard() { setCard(!cardOpen); }
-
-function setCard(open) {
-    cardOpen = open;
-    const card = document.getElementById('nn-card');
-    const wrapper = document.getElementById('nn-card-wrapper');
-    if (!card) return;
-
-if (open) {
-    if (wrapper) wrapper.style.display = '';
-    card.style.visibility = 'hidden';
-    card.classList.remove('nn-hidden');
-    card.classList.toggle('nn-compact', isCompact());
-    // На мобилке compact всегда горизонтальный — ставим класс принудительно
-    if (isCompact() && window.innerWidth <= 768) {
-        card.classList.add('nn-compact-h');
-    } else if (window.innerWidth <= 768) {
-        card.classList.remove('nn-compact-h');
-    }
-    card.classList.toggle('nn-pinned', isPinned());
-    restoreCardPos(card);
-    requestAnimationFrame(() => {
-        card.style.visibility = '';renderCard();
-    });
-    if (!isPinned()) {
-        setTimeout(() => {
-            document.addEventListener('pointerdown', onOutsideClick, true);
-        }, 0);
-    }
-} else {
-    card.classList.add('nn-hidden');
-    if (wrapper) wrapper.style.display = 'none';
-    document.removeEventListener('pointerdown', onOutsideClick, true);
-}
-}
-
-
-
-// Закрытие карточки по клику в любом месте вне неё
-function onOutsideClick(e) {
-    const card = document.getElementById('nn-card');
-    if (!card || card.classList.contains('nn-hidden')) return;
-    if (card.contains(e.target)) return;                       // клик по карточке
-    if (e.target.closest('#nn-toggle')) return;                // клик по кнопке 🍎
-    if (e.target.closest('#nn-minibar')) return;               // клик по мини-панели
-    if (e.target.closest('.nn-notify')) return;                // клик по уведомлению
-    setCard(false);
-}
-
-
-function renderCard() {
-    if (!state || !cardOpen) return;
-    renderCardBody();
-}
-
-// ═══════════════════════════════════════════════════════════════
-// PROMPT INJECTION — системный промпт для ИИ
-// ═══════════════════════════════════════════════════════════════
-// Оценка физической дееспособности персонажа для промпта
-function getActionCapacity(data) {
-    const hasCritical = data.diseases.some(d => !d.recovering && (d.severity === 'critical'));
-    const hasSevere = data.diseases.some(d => !d.recovering && (d.severity === 'severe'));
-    const hasDisease = data.diseases.length > 0;
-
-    if (hasCritical || data.health <= 15) {
-        return {
-            label: 'INCAPACITATED',
-            instruction: 'The body is shutting down. ANY demanding action fails outright: cannot run, fight, or even stand for long. Survival requires help from others.',
-        };
-    }
-    if (hasSevere || data.energy <= 15 || data.health <= 35) {
-        return {
-            label: 'CRITICALLY WEAKENED',
-            instruction: 'Demanding physical actions FAIL by default. Fleeing danger, fighting, climbing — the body betrays them mid-attempt. At best a desperate, costly partial success with lasting consequences.',
-        };
-    }
-    if (hasDisease || data.energy <= 35 || data.satiety <= 20 || data.water <= 20) {
-        return {
-            label: 'WEAKENED',
-            instruction: 'Physical actions succeed only with visible strain and at reduced effectiveness. Prolonged effort (a long chase, a long fight) is likely to fail partway.',
-        };
-    }
-    if (data.energy >= 70 && data.satiety >= 50 && data.water >= 50) {
-        return {
-            label: 'STRONG',
-            instruction: 'The body is well-maintained and responds fully. Physical actions succeed as attempted, movements are confident and capable.',
-        };
-    }
-    return {
-        label: 'NORMAL',
-        instruction: 'Physical actions succeed normally, though the character is not at peak condition.',
-    };
-}
-
-function buildSystemPrompt() {
-    if (!state) return '';
-
-    const userName = getUserName();
-    const botName = getBotName();
-    const u = state.user;
-    const b = getBotState();
-
-    const userStatus = getPhysicalStatus(u);
-    const botStatus = b ? getPhysicalStatus(b) : 'unknown';
-
-    const userDebuffs = u.debuffs.map(d => d.name).join(', ') || 'none';
-    const userBuffs = u.buffs.map(d => d.name).join(', ') || 'none';
-    const userDiseases = u.diseases.map(d => `${d.name} (${d.severity})`).join(', ') || 'none';
-
-    const botBuffs = b ? (b.buffs.map(d => d.name).join(', ') || 'none') : 'n/a';
-    const botDebuffs = b ? (b.debuffs.map(d => d.name).join(', ') || 'none') : 'n/a';
-    const botDiseases = b ? (b.diseases.map(d => `${d.name} (${d.severity})`).join(', ') || 'none') : 'n/a';
-
-    const pregnancyLine = u.pregnant
-        ? `\n  Pregnancy: Week ${u.pregnancyWeek} — increased calorie and water needs, fatigue sensitivity.`
-        : '';
-
-    let prompt = `[NUTRITION FRAMEWORK — live physiological state. Weave naturally into narration, never quote numbers.]
-
-═══ ${userName} (Player Character) ═══
-  Calories today: ${u.calories} / ${u.calorieGoal} kcal
-  Satiety: ${Math.round(u.satiety)}% | Hydration: ${Math.round(u.water)}% | Energy: ${Math.round(u.energy)}% | Health: ${Math.round(u.health)}%
-  Weight: ${u.weight} kg | Hours since last meal: ${u.hoursSinceLastMeal}h
-  Overall status: ${userStatus.toUpperCase()}
-  Active buffs: ${userBuffs}
-  Active debuffs: ${userDebuffs}
-  Diseases: ${userDiseases}${pregnancyLine}
-
-`;
-
-    // Подробные симптомы (пользователь всегда, бот — если загружен)
-    const userCondPrompt = buildConditionPrompt(u, userName);
-    const botCondPrompt = b ? buildConditionPrompt(b, botName) : '';
-
-    if (userCondPrompt || botCondPrompt) {
-        prompt += `═══ ACTIVE CONDITIONS (show symptoms in narration) ═══${userCondPrompt}${botCondPrompt}\n\n`;
-    }
-
-    if (b) {
-        const botPregnancy = b.pregnant
-            ? `\n  Pregnancy: Week ${b.pregnancyWeek}`
-            : '';
-
-        prompt += `═══ ${botName} (NPC) ═══
-  Calories today: ${b.calories} / ${b.calorieGoal} kcal
-  Satiety: ${Math.round(b.satiety)}% | Hydration: ${Math.round(b.water)}% | Energy: ${Math.round(b.energy)}% | Health: ${Math.round(b.health)}%
-  Weight: ${b.weight} kg | Hours since last meal: ${b.hoursSinceLastMeal}h
-  Overall status: ${botStatus.toUpperCase()}
-  Active buffs: ${botBuffs}
-  Active debuffs: ${botDebuffs}
-  Diseases: ${botDiseases}${botPregnancy}
-
-`;
-    }
-
-    const capacity = getActionCapacity(u);
-    const botCap = b ? getActionCapacity(b) : null;
-    const botCapacityLine = botCap
-        ? `\n- ${botName}'s current physical capacity: ${botCap.label}. ${botCap.instruction} This applies to ${botName}'s actions the same way: a weakened NPC cannot suddenly perform feats of strength.`
-        : '';
-
-    prompt += `═══ MECHANICAL TAG — REQUIRED ═══
-At the END of every reply, on its own line, append ONE invisible HTML comment:
-
-<!-- NN tp=VALUE | activity=VALUE | ate=ITEMS | drank=ITEMS -->
-
-Field meanings:
-  tp        = NUMBER: in-world hours elapsed since previous message (sleep counts! a night = 8, short scene = 0.5). ALWAYS include.
-  activity  = ONE word: resting / normal / active / intense. ALWAYS include.
-  sleeping  = true (ONLY if the character sleeps this turn, otherwise OMIT)
-
-  ate / user_ate / bot_ate = FOOD eaten this turn.
-  drank / user_drank / bot_drank = DRINKS this turn.
-
-CRITICAL — WHO ate/drank WHAT (attribution rules, follow EXACTLY):
-  • ${userName} is the POV character. Food/drinks with NO explicit owner go under "ate"/"drank" and count for ${userName} ONLY.
-  • The MOMENT ${botName} (or any NPC) eats or drinks, you MUST use bot_ate / bot_drank. Never put NPC consumption in the generic "ate"/"drank".
-  • NEVER list the same item in both a generic field and a user_/bot_ field — pick ONE. Duplicates are ignored.
-  • If ONLY ${userName} eats, write ONLY "ate" (or user_ate). Do NOT invent bot_ate. If ONLY ${botName} eats, write ONLY bot_ate — leave "ate" empty.
-  • If BOTH eat, use user_ate AND bot_ate explicitly, each with its own items.
-
-CRITICAL — HOW TO WRITE FOOD (this drives calorie tracking):
-  • Write each food in RUSSIAN, concretely, with an estimated calorie number after a colon. Format: название:ККАЛ — items separated by commas.
-  • ESTIMATE calories from the ACTUAL portion in the scene. Small bite ≈ 80-150, normal plate ≈ 300-500, hearty feast ≈ 800-1200.
-  • Distinguish specific foods: "говядина", "свинина", "курица", "рыба" — NOT a generic "meat".
-  • Drinks: write название:ПРОЦЕНТ (percent of hydration restored). A normal cup: water≈25, tea≈15, juice≈18. If someone drinks A LOT (deeply, to their fill, a whole jug), RAISE the percent to 40-60. A tiny sip: 5-10. Match the amount shown in the scene.
-
-Examples (Russian names + calorie estimates):
-<!-- NN tp=0.5 | activity=normal -->
-<!-- NN tp=8 | activity=resting | sleeping=true -->
-<!-- NN tp=1 | activity=normal | ate=борщ:300,хлеб:80 | drank=чай:15 -->
-<!-- NN tp=2 | activity=active | user_ate=жареная курица:400 | bot_ate=говядина тушёная:350 | drank=вода:25 -->
-<!-- NN tp=1 | activity=normal | bot_drank=вино:5 | drank=вода:25 -->
-
-This line is an HTML comment — invisible to the reader. NEVER skip it.`;
-
-    return prompt;
-}
-
-function injectPrompt() {
-    if (!isEnabled()) {
-        setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 2, true, extension_prompt_roles.SYSTEM);
-        return;
-    }
-    const prompt = buildSystemPrompt();
-    setExtensionPrompt(
-        PROMPT_KEY,
-        prompt,
-        extension_prompt_types.IN_CHAT,
-        2,
-        true,
-        extension_prompt_roles.SYSTEM
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// RENDER CARD BODY (by active tab)
-// ═══════════════════════════════════════════════════════════════
-function renderCardBody() {
-    const body = document.getElementById('nn-body');
-    if (!body || !state) return;
-
-    if (isCompact()) {
-        renderCompactBody(body);
-        return;
-    }
-
-    switch (activeTab) {
-        case 'overview':  renderOverview(body); break;
-        case 'weight':    renderWeightTab(body); break;
-        case 'products':  renderProductsTab(body); break;
-        case 'settings':  renderSettingsTab(body); break;
-        default:          renderOverview(body); break;
+    let first = null;
+    for (const m of chat) { if (m && !m.is_user && m.mes) { first = m.mes; break; } }
+    if (!first) first = getCurrentBot()?.first_mes || '';
+
+    const est = analyzeInitialState(first);
+    if (state.clockHours == null) state.clockHours = est.startHour;
+
+    const hour = state.clockHours % 24;
+    // сколько «дневной нормы» обычно уже съедено к этому часу
+    const dayShare = Math.max(0, Math.min(0.9, (hour - 7) / 14));
+
+    for (const c of [state.user, getBotState()]) {
+        if (!c || c.initialAnalyzed) continue;
+        const g = effectiveGoal(c);
+        c.satiety = est.satiety;
+        c.water = est.water;
+        c.energy = est.energy;
+        c.reserve = Math.round(g * (0.25 + 0.5 * est.satiety / 100));
+        c.calories = Math.round(g * dayShare);
+        c.hoursSinceLastMeal = est.satiety >= 90 ? 0 : est.satiety <= 35 ? 7 : 3;
+        c.initialAnalyzed = true;
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// РЕДАКТОР ПАРАМЕТРОВ ПЕРСОНАЖА (шестерёнка в карточке)
+// СНИМКИ — пересчёт при свайпе/правке, откат при удалении
 // ═══════════════════════════════════════════════════════════════
-let editingWho = null; // 'user' | 'bot' | null
-
-function getEditTarget() {
-    if (editingWho === 'user') return state.user;
-    if (editingWho === 'bot') return getBotState();
-    return null;
-}
-
-function openCharEditor(who) {
-    editingWho = (editingWho === who) ? null : who; // повторный клик — закрыть
-    renderCardBody();
-}
-
-// Возвращает HTML формы редактора для конкретного персонажа
-function renderCharEditor(data, isUser) {
-    if (!data) return '';
-
-    const activityOptions = Object.entries(ACTIVITY_LEVELS).map(([key, v]) =>
-        `<option value="${key}" ${data.activity === key ? 'selected' : ''}>${v.labelRu}</option>`
-    ).join('');
-
-    const buildOptions = Object.entries(BUILD_TYPES).map(([key, v]) =>
-        `<option value="${key}" ${data.build === key ? 'selected' : ''}>${v.labelRu}</option>`
-    ).join('');
-
-    const genderOptions = [
-        ['male', 'Мужчина'], ['female', 'Женщина'], ['unknown', 'Не указан'],
-    ].map(([key, label]) =>
-        `<option value="${key}" ${data.gender === key ? 'selected' : ''}>${label}</option>`
-    ).join('');
-
-    const who = isUser ? 'user' : 'bot';
-    const autoGoal = calculateCalorieGoal({
-        gender: data.gender, weight: data.weight, height: data.height,
-        age: data.age, activity: data.activity, build: data.build,
-        pregnant: data.pregnant, pregnancyWeek: data.pregnancyWeek,
+function takeSnapshot(beforeMsg) {
+    state.snapshots = state.snapshots.filter(s => s.beforeMsg < beforeMsg);
+    state.snapshots.push({
+        beforeMsg,
+        user: clone(state.user),
+        characters: clone(state.characters),
+        clockHours: state.clockHours,
+        turn: state.turn,
+        lastGameTime: state.lastGameTime,
+        weightHistory: clone(state.weightHistory),
+        history: clone(state.history),
     });
-
-    const pregRowHtml = data.gender === 'male' ? '' : `<div class="nn-edit-preg-row">
-        <label class="nn-edit-manual">
-            <input type="checkbox" class="nn-edit-preg-chk" data-who="${who}" ${data.pregnant ? 'checked' : ''}>
-            Беременность
-        </label>
-        <input type="number" class="nn-edit-preg-week" data-who="${who}" min="0" max="42" placeholder="неделя"
-               value="${data.pregnancyWeek || ''}" ${data.pregnant ? '' : 'disabled'}>
-    </div>`;
-
-    return `<div class="nn-edit-panel" data-who="${who}">
-        <div class="nn-edit-title">Параметры</div>
-        <div class="nn-edit-grid">
-            <label>Пол<select class="nn-edit-field" data-field="gender">${genderOptions}</select></label>
-            <label>Возраст<input type="number" class="nn-edit-field" data-field="age" min="16" max="99" value="${data.age}"></label>
-            <label>Рост, см<input type="number" class="nn-edit-field" data-field="height" min="120" max="230" value="${data.height}"></label>
-            <label>Вес, кг<input type="number" class="nn-edit-field" data-field="weight" min="30" max="250" value="${data.weight}"></label>
-            <label>Телосложение<select class="nn-edit-field" data-field="build">${buildOptions}</select></label>
-            <label>Активность<select class="nn-edit-field" data-field="activity">${activityOptions}</select></label>
-        </div>
-        <div class="nn-edit-goal-row">
-            <label class="nn-edit-manual">
-                <input type="checkbox" class="nn-edit-manual-chk" data-who="${who}" ${data.manualGoal != null ? 'checked' : ''}>
-                Задать норму вручную
-            </label>
-            <input type="number" class="nn-edit-goal-input" data-who="${who}" min="800" max="6000"
-                   value="${data.manualGoal != null ? data.manualGoal : autoGoal}"
-                   ${data.manualGoal == null ? 'disabled' : ''}>
-            <span class="nn-edit-goal-hint">расчёт: ${autoGoal} ккал</span>
-        </div>
-        ${pregRowHtml}
-        <div class="nn-edit-btns">
-            <button class="nn-edit-recalc" data-who="${who}">↻ Пересчитать по карточке</button>
-            <button class="nn-edit-done" data-who="${who}">Готово</button>
-        </div>
-    </div>`;
+    if (state.snapshots.length > 30) state.snapshots = state.snapshots.slice(-30);
 }
 
-
-// Навешивает обработчики на форму редактора (вызывается после innerHTML)
-function bindCharEditor() {
-    const panel = document.querySelector('.nn-edit-panel');
-    if (!panel) return;
-    const who = panel.dataset.who;
-    const data = who === 'user' ? state.user : getBotState();
-    if (!data) return;
-
-    // Поля (пол, возраст, рост, вес, телосложение, активность)
-    panel.querySelectorAll('.nn-edit-field').forEach(el => {
-        el.addEventListener('change', () => {
-            const field = el.dataset.field;
-            let val = el.value;
-            if (['age', 'height', 'weight'].includes(field)) {
-                val = parseInt(val);
-                if (isNaN(val)) return;
-            }
-            data[field] = val;
-            // Мужской пол — беременность автоматически снимается
-            if (field === 'gender' && val === 'male') {
-                data.pregnant = false;
-                data.pregnancyWeek = 0;
-            }
-            // Если норма не ручная — пересчитываем автоматически
-            if (data.manualGoal == null) recalcGoal(data);
-            saveState();
-            renderCardBody();
-        });
-    });
-
-    // Чекбокс ручной нормы
-    panel.querySelector('.nn-edit-manual-chk')?.addEventListener('change', (e) => {
-        const input = panel.querySelector('.nn-edit-goal-input');
-        if (e.target.checked) {
-            data.manualGoal = parseInt(input.value) || calculateCalorieGoal({
-                gender: data.gender, weight: data.weight, height: data.height,
-                age: data.age, activity: data.activity, build: data.build,
-            });
-            input.disabled = false;
-        } else {
-            data.manualGoal = null;
-            recalcGoal(data);
-            input.disabled = true;
-        }
-        saveState();
-        renderCardBody();
-    });
-
-    // Ввод ручной нормы
-    panel.querySelector('.nn-edit-goal-input')?.addEventListener('change', (e) => {
-        const val = parseInt(e.target.value);
-        if (!isNaN(val) && val >= 800 && val <= 6000) {
-            data.manualGoal = val;
-            saveState();
-            renderCardBody();
-        }
-    });
-
-    // Беременность
-    panel.querySelector('.nn-edit-preg-chk')?.addEventListener('change', (e) => {
-        data.pregnant = e.target.checked;
-        const weekInput = panel.querySelector('.nn-edit-preg-week');
-        if (!e.target.checked) {
-            data.pregnancyWeek = 0;
-            weekInput.disabled = true;
-        } else {
-            weekInput.disabled = false;
-        }
-        if (data.manualGoal == null) recalcGoal(data);
-        saveState();
-        renderCardBody();
-    });
-
-    panel.querySelector('.nn-edit-preg-week')?.addEventListener('change', (e) => {
-        const val = parseInt(e.target.value);
-        if (!isNaN(val) && val >= 0 && val <= 42) {
-            data.pregnancyWeek = val;
-            if (val > 0) data.pregnant = true;
-            if (data.manualGoal == null) recalcGoal(data);
-            saveState();
-            renderCardBody();
-        }
-    });
-
-    // Пересчитать по карточке (заново анализирует описание)
-    panel.querySelector('.nn-edit-recalc')?.addEventListener('click', () => {
-        if (who === 'user') {
-            state.user.analyzed = false;
-            analyzeUser();
-        } else {
-            const bot = getCurrentBot();
-            if (bot) {
-                const cardText = `${bot.name} ${bot.description || ''} ${bot.personality || ''} ${bot.first_mes || ''}`;
-                const params = buildCharacterParams(cardText);
-                Object.assign(data, {
-                    gender: params.gender, age: params.age, height: params.height,
-                    weight: params.weight, build: params.build, activity: params.activity,
-                });
-                if (data.manualGoal == null) data.calorieGoal = params.calorieGoal;
-            }
-        }
-        saveState();
-        notify('Параметры пересчитаны по карточке', 'success', 3000);
-        renderCardBody();
-    });
-
-    // Готово — закрыть
-    panel.querySelector('.nn-edit-done')?.addEventListener('click', () => {
-        editingWho = null;
-        renderCardBody();
-    });
+function keepProfile(from, to) {
+    if (!from || !to) return;
+    for (const f of PROFILE_FIELDS) to[f] = from[f];
 }
 
-// ─── OVERVIEW TAB ─────────────────────────────────────────────
-function renderOverview(body) {
-    const u = state.user;
-    const b = getBotState();
-
-    body.innerHTML = `<div class="nn-chars-row">
-            ${renderCharCard(u, getUserAvatar(), getUserName(), true)}
-            ${b ? renderCharCard(b, getBotAvatar(), getBotName(), false) : renderEmptyBotCard()}
-        </div>
-        <div class="nn-sections-row">
-            ${renderConditionsSection()}
-            ${renderBuffsSection()}
-            ${renderDebuffsSection()}
-        </div>
-        <div class="nn-section nn-overview-help">
-            <div class="nn-section-header">
-                <span class="nn-section-icon">📊</span>
-                <span class="nn-section-title">Как это работает</span>
-            </div>
-            <div class="nn-section-body">
-                <p class="nn-help-text">Калории и вода расходуются автоматически по мере течения игрового времени. Еда восстанавливает калории и сытость, питьё — воду. Расширение само распознаёт приёмы пищи и напитки в повествовании и обновляет состояние персонажей.</p>
-                <p class="nn-help-text">Долгое голодание или обезвоживание ведёт к дебаффам, болезням и физическому истощению. Вода ниже 30% — риск обезвоживания, ниже 15% — критическое состояние с тяжёлыми штрафами.</p>
-            </div>
-        </div>`;
-
-
-    // Кнопки-шестерёнки
-    body.querySelectorAll('.nn-char-gear').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openCharEditor(btn.dataset.who);
-        });
-    });
-
-    // Значок беременности — показать/скрыть пояснение
-    body.querySelectorAll('.nn-pregnancy-badge').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const panel = document.getElementById(`nn-preg-detail-${btn.dataset.who}`);
-            if (panel) panel.classList.toggle('nn-hidden');
-        });
-    });
-
-    // Обработчики формы редактора (если открыта)
-    bindCharEditor();
-}
-
-function renderCharCard(data, avatarSrc, charName, isUser) {
-    const goal = effectiveGoal(data);
-    const calPct = Math.min(100, Math.round((data.calories / goal) * 100));
-    const overfill = data.calories > goal;
-
-    let barClass = '';
-    if (overfill) barClass = 'nn-overfill';
-    else if (calPct < 30) barClass = 'nn-danger';
-    else if (calPct < 60) barClass = 'nn-warn';
-
-    const statusInfo = getOverallStatus(data);
-    const icon = isUser ? '♛' : '♜';
-    const who = isUser ? 'user' : 'bot';
-
-    const avatarHtml = avatarSrc
-        ? `<img src="${avatarSrc}" alt="" onerror="this.style.display='none'">`
-        : `<div class="nn-char-avatar-placeholder">👤</div>`;
-
-    // Подзаголовок: пол · возраст · рост
-    const genderTxt = data.gender === 'male' ? '♂' : data.gender === 'female' ? '♀' : '';
-    const subtitle = `${genderTxt} ${data.age} лет · ${data.height} см`;
-
-    let pregnancyHtml = '';
-    let pregnancyDetailHtml = '';
-    if (data.pregnant && data.gender !== 'male') {
-        const stage = getPregnancyStage(data.pregnancyWeek);
-        pregnancyHtml = `<button type="button" class="nn-pregnancy-badge" data-who="${who}">🤰 ${data.pregnancyWeek > 0 ? data.pregnancyWeek + ' нед.' : 'рано'}</button>`;
-
-        const details = [];
-        if (stage.desc) details.push(stage.desc);
-        if (stage.calMult && stage.calMult > 1) details.push(`⚡ Норма калорий ×${stage.calMult} — организм тратит больше энергии на плод`);
-        if (stage.waterMult && stage.waterMult > 1) details.push(`💧 Расход воды ×${stage.waterMult} — повышенная потребность в жидкости`);
-        if (stage.nausea) details.push('🤢 Токсикоз: возможна тошнота, особенно после еды — сытость может снижаться сама по себе');
-        if (stage.fatigue) details.push('😴 Повышенная усталость: энергия падает быстрее, нужен более частый отдых');
-
-        pregnancyDetailHtml = `<div class="nn-preg-detail nn-hidden" id="nn-preg-detail-${who}">
-            <div class="nn-preg-detail-title">${stage.label} · неделя ${data.pregnancyWeek}</div>
-            ${details.map(d => `<div class="nn-preg-detail-line">${d}</div>`).join('')}
-        </div>`;
-    }
-
-    // Форма редактора (если открыта для этого персонажа)
-    const editorHtml = (editingWho === who) ? renderCharEditor(data, isUser) : '';
-
-    return `<div class="nn-char-card">
-        <button class="nn-char-gear" data-who="${who}" title="Редактировать параметры">⚙</button>
-
-        <div class="nn-char-top">
-            <div class="nn-char-avatar">${avatarHtml}</div>
-            <div class="nn-char-info">
-                <div class="nn-char-name">${charName} <span class="nn-char-name-icon">${icon}</span></div>
-                <div class="nn-char-subtitle">${subtitle}</div>
-            </div>
-        </div>
-
-        <div class="nn-cal-block">
-            <div class="nn-cal-numbers">
-                <span class="nn-cal-current">${data.calories}</span>
-                <span class="nn-cal-sep">/</span>
-                <span class="nn-cal-goal">${goal}</span>
-                <span class="nn-cal-unit">ккал</span>
-            </div>
-            <div class="nn-cal-bar-row">
-                <div class="nn-cal-bar">
-                    <div class="nn-cal-bar-fill ${barClass}" style="width:${calPct}%"></div>
-                </div>
-                <span class="nn-cal-pct">${calPct}%</span>
-            </div>
-        </div>
-
-        <div class="nn-char-bottom">
-            <div class="nn-stats-grid">
-                ${renderStatRow('🥄', 'Сытость', data.satiety, 'satiety')}
-                ${renderStatRow('💧', 'Вода', data.water, 'water')}
-                ${renderStatRow('⚡', 'Энергия', data.energy, 'energy')}
-                ${renderStatRow('❤', 'Здоровье', data.health, 'health')}
-            </div>
-            <div class="nn-status-circle-wrap">
-                <div class="nn-status-circle ${statusInfo.cls}">${statusInfo.icon}</div>
-                <span class="nn-status-text">${statusInfo.text}</span>
-            </div>
-        </div>
-
-        <div class="nn-weight-line">
-            <span>⚖ Вес <b>${data.weight} кг</b></span>
-            ${pregnancyHtml}
-        </div>
-        ${pregnancyDetailHtml}
-
-        ${editorHtml}
-    </div>`;
-}
-
-function renderEmptyBotCard() {
-    return `<div class="nn-char-card"><span class="nn-empty">Персонаж не загружен</span></div>`;
-}
-
-function renderStatRow(icon, label, value, type) {
-    const clamped = Math.max(0, Math.min(100, value || 0));
-    return `<div class="nn-stat-row">
-        <span class="nn-stat-icon">${icon}</span>
-        <span class="nn-stat-label">${label}</span>
-        <div class="nn-stat-bar"><div class="nn-stat-bar-fill nn-fill-${type}" style="width:${clamped}%"></div></div>
-        <span class="nn-stat-val">${Math.round(value || 0)}%</span>
-    </div>`;
-}
-
-
-function getOverallStatus(data) {
-    if (data.diseases.some(d => d.severity === 'critical' || d.severity === 'severe')) {
-        return { text: 'Критично', icon: '💔', cls: 'nn-status-danger' };
-    }
-    if (data.diseases.length > 0 || (data.health || 100) < 40 || (data.energy || 100) < 20) {
-        return { text: 'Плохо', icon: '⚠', cls: 'nn-status-warn' };
-    }
-    if ((data.satiety || 100) < 30 || (data.water || 100) < 30) {
-        return { text: 'Стресс', icon: '⚡', cls: 'nn-status-warn' };
-    }
-    if ((data.health || 100) > 70 && (data.energy || 100) > 60 && (data.satiety || 100) > 50) {
-        return { text: 'Здоров', icon: '♥', cls: '' };
-    }
-    return { text: 'Стабильно', icon: '♥', cls: '' };
-}
-
-// Сколько часов осталось до конца выздоровления болезни
-function diseaseRecoveryLeft(d) {
-    if (!d.recovering) return null;
-    const need = DISEASE_DB[d.id]?.recovery?.[d.severity] ?? 6;
-    return Math.max(0.5, Math.round(need - (d.recoveryHours || 0)));
-}
-
-// ─── SECTIONS (bottom of Overview) ────────────────────────────
-function renderConditionsSection() {
-    const allDiseases = [
-        ...state.user.diseases.map(d => ({ ...d, owner: getUserName(), ownerType: 'user' })),
-        ...(getBotState()?.diseases || []).map(d => ({ ...d, owner: getBotName(), ownerType: 'bot' })),
-    ];
-
-    const items = allDiseases.length > 0
-        ? allDiseases.map(d => {
-            const sevCls = `nn-sev-${d.severity}`;
-            const effectsHtml = (d.effects || []).map(e => `
-                <div class="nn-condition-effect">
-                    <span class="nn-condition-effect-name">⚡ ${e}</span>
-                </div>`).join('');
-
-            const severityLabel = {
-                mild: 'Лёгкая', moderate: 'Средняя',
-                severe: 'Тяжёлая', critical: 'Критическая',
-            }[d.severity] || d.severity;
-
-            return `
-            <div class="nn-condition-item ${sevCls}">
-                <div class="nn-condition-top">
-                    <span class="nn-condition-name">⊘ ${d.name} <span class="nn-condition-owner nn-owner-${d.ownerType}">· ${d.owner}</span></span>
-                    <span class="nn-severity-badge ${sevCls}">${severityLabel}</span>
-                    <span class="nn-condition-time">${d.recovering ? `выздоровление ~${diseaseRecoveryLeft(d)}ч` : (d.since || '')}</span>
-                </div>
-                <div class="nn-condition-effects">${effectsHtml}</div>
-            </div>`;
-        }).join('')
-        : '<span class="nn-empty">Нет заболеваний</span>';
-
-    // Иммунитет отдельной строкой на каждого персонажа
-    const immRow = (data, name, type) => {
-        const imm = calculateImmunity(data);
-        const cls = imm >= 60 ? 'nn-imm-good' : imm >= 35 ? 'nn-imm-mid' : 'nn-imm-low';
-        return `<div class="nn-immunity-row">
-            🛡 <span class="nn-condition-owner nn-owner-${type}">${name}</span>:
-            <span class="nn-immunity-val ${cls}">${imm}%</span>
-        </div>`;
-    };
-
-    const botData = getBotState();
-    let immunityHtml = immRow(state.user, getUserName(), 'user');
-    if (botData) immunityHtml += immRow(botData, getBotName(), 'bot');
-
-    return `
-    <div class="nn-section">
-        <div class="nn-section-header">
-            <span class="nn-section-icon">⚠</span>
-            <span class="nn-section-title">Состояния</span>
-        </div>
-        <div class="nn-section-body nn-section-scroll">${items}</div>
-        ${immunityHtml}
-    </div>`;
-}
-
-function renderBuffsSection() {
-    const allBuffs = [
-        ...state.user.buffs.map(b => ({ ...b, owner: getUserName(), ownerType: 'user' })),
-        ...(getBotState()?.buffs || []).map(b => ({ ...b, owner: getBotName(), ownerType: 'bot' })),
-    ];
-
-    const items = allBuffs.length > 0
-        ? allBuffs.map(b => `
-            <div class="nn-buff-item">
-                <div class="nn-buff-left">
-                    <span class="nn-buff-icon">${b.icon || '✦'}</span>
-                    <span class="nn-buff-name">${b.name}${b.hoursLeft != null ? ` <i>(~${Math.max(0.5, Math.round(b.hoursLeft * 2) / 2)}ч)</i>` : ''} <span class="nn-condition-owner nn-owner-${b.ownerType}">· ${b.owner}</span></span>
-                </div>
-                <span class="nn-buff-val">${b.effect || ''}</span>
-            </div>`).join('')
-        : '<span class="nn-empty">Нет баффов</span>';
-
-    return `
-    <div class="nn-section">
-        <div class="nn-section-header">
-            <span class="nn-section-icon">✦</span>
-            <span class="nn-section-title">Баффы</span>
-        </div>
-        <div class="nn-section-body nn-section-scroll">${items}</div>
-    </div>`;
-}
-
-function renderDebuffsSection() {
-    const allDebuffs = [
-        ...state.user.debuffs.map(d => ({ ...d, owner: getUserName(), ownerType: 'user' })),
-        ...(getBotState()?.debuffs || []).map(d => ({ ...d, owner: getBotName(), ownerType: 'bot' })),
-    ];
-
-    const items = allDebuffs.length > 0
-        ? allDebuffs.map(d => `
-            <div class="nn-debuff-item">
-                <div class="nn-debuff-left">
-                    <span class="nn-debuff-icon">${d.icon || '☠'}</span>
-                    <span class="nn-debuff-name">${d.name}${d.fading ? ` <i>(проходит, ~${Math.max(0.5, Math.round((d.fadeLeft || 0) * 2) / 2)}ч)</i>` : ''} <span class="nn-condition-owner nn-owner-${d.ownerType}">· ${d.owner}</span></span>
-                </div>
-                <span class="nn-debuff-val">${d.effect || ''}</span>
-            </div>`).join('')
-        : '<span class="nn-empty">Нет дебаффов</span>';
-
-    return `
-    <div class="nn-section">
-        <div class="nn-section-header">
-            <span class="nn-section-icon">☠</span>
-            <span class="nn-section-title">Дебаффы</span>
-        </div>
-        <div class="nn-section-body nn-section-scroll">${items}</div>
-    </div>`;
-}
-//─── COMPACT MODE ─────────────────────────────────────────────
-function renderCompactCharCard(data, avatarSrc, charName, isUser) {
-    if (!data) return '';
-
-    const goal = effectiveGoal(data);
-    const calPct = Math.min(100, Math.round((data.calories / goal) * 100));
-    const overfill = data.calories > goal;
-    let barClass = '';
-    if (overfill)barClass = 'nn-overfill';
-    else if (calPct < 30) barClass = 'nn-danger';
-    else if (calPct < 60) barClass = 'nn-warn';
-
-    const statusInfo = getOverallStatus(data);
-    const icon = isUser ? '♛' : '♜';
-    const genderTxt = data.gender === 'male' ? '♂' : data.gender === 'female' ? '♀' : '';
-
-    const avatarHtml = avatarSrc
-        ? `<img src="${avatarSrc}" alt="" onerror="this.style.display='none'">`
-        : `<div class="nn-char-avatar-placeholder">👤</div>`;
-
-    function cmpStat(ico, label, value, type) {
-        const c = Math.max(0, Math.min(100, value || 0));
-        return `<div class="nn-cmp-stat-row">
-            <span class="nn-cmp-stat-icon">${ico}</span>
-            <span class="nn-cmp-stat-label">${label}</span>
-            <div class="nn-cmp-stat-bar">
-                <div class="nn-cmp-stat-fill nn-fill-${type}" style="width:${c}%"></div>
-            </div>
-            <span class="nn-cmp-stat-val">${Math.round(value || 0)}%</span>
-        </div>`;
-    }
-
-    // Эффекты — компактные пилюли
-    const buffPills = data.buffs.map(b =>
-        `<span class="nn-cmp-pill nn-pill-buff" title="${b.name}">${b.icon || '✦'} ${b.name}</span>`
-    ).join('');
-    const debuffPills = data.debuffs.map(d =>
-        `<span class="nn-cmp-pill nn-pill-debuff" title="${d.name}">${d.icon || '☠'} ${d.name}</span>`
-    ).join('');
-    const diseasePills = data.diseases.map(d =>
-        `<span class="nn-cmp-pill nn-pill-disease" title="${d.name + ' · ' + d.severity}">🦠 ${d.name}</span>`
-    ).join('');
-    const hasFx = data.buffs.length || data.debuffs.length || data.diseases.length;
-
-    return `<div class="nn-cmp-card">
-        <!-- Верхняя строка: аватар + имя + калории + статус -->
-        <div class="nn-cmp-top">
-            <div class="nn-cmp-avatar">${avatarHtml}</div>
-            <div class="nn-cmp-head">
-                <div class="nn-cmp-name">${charName} <span class="nn-cmp-name-icon">${icon}</span></div>
-                <div class="nn-cmp-subtitle">${genderTxt} ${data.age} лет · ${data.height} см · ⚖ ${data.weight} кг</div><div class="nn-cmp-cal-row">
-                    <span class="nn-cmp-cal-cur">${data.calories}</span>
-                    <span class="nn-cmp-cal-sep">/</span>
-                    <span class="nn-cmp-cal-goal">${goal}</span>
-                    <span class="nn-cmp-cal-unit">ккал</span>
-                </div>
-                <div class="nn-cmp-calbar-wrap">
-                    <div class="nn-cmp-calbar">
-                        <div class="nn-cmp-calbar-fill ${barClass}" style="width:${calPct}%"></div>
-                    </div>
-                    <span class="nn-cmp-cal-pct">${calPct}%</span>
-                </div>
-            </div>
-            <div class="nn-cmp-status-col">
-                <div class="nn-status-circle ${statusInfo.cls} nn-cmp-circle">${statusInfo.icon}</div>
-                <span class="nn-cmp-status-txt">${statusInfo.text}</span>
-            </div>
-        </div>
-
-        <!-- Статы (4 бара) -->
-        <div class="nn-cmp-stats">
-            ${cmpStat('🥄', 'Сытость', data.satiety, 'satiety')}
-            ${cmpStat('💧', 'Вода',data.water,   'water')}
-            ${cmpStat('⚡', 'Энергия', data.energy,  'energy')}
-            ${cmpStat('❤',  'Здоровье',data.health,  'health')}
-        </div>
-
-        <!-- Баффы / дебаффы / болезни -->
-        ${hasFx ? `<div class="nn-cmp-fx">${buffPills}${debuffPills}${diseasePills}</div>` : ''}
-    </div>`;
-}
-
-function renderCompactBody(body) {
-    const u = state.user;
-    const b = getBotState();
-
-    // На мобилке всегда горизонтальная раскладка (две карточки рядом)
-    const isMobile = window.innerWidth <= 768;
-    const layout = isMobile ? 'horizontal' : (localStorage.getItem(COMPACT_LAYOUT_LS_KEY) || 'vertical');
-
-    const card = document.getElementById('nn-card');
-    if (card) card.classList.toggle('nn-compact-h', layout === 'horizontal');
-
-    body.innerHTML = `<div class="nn-compact-wrap nn-layout-${layout}">
-        ${renderCompactCharCard(u, getUserAvatar(), getUserName(), true)}
-        ${b ? renderCompactCharCard(b, getBotAvatar(), getBotName(), false) : ''}
-        <div class="nn-cmp-footer">
-            <span class="nn-cmp-day">📅 День ${state.dayCount || 1}</span>
-            <button class="nn-cmp-expand" id="nn-cmp-expand-btn">Полный вид ↗</button>
-        </div>
-    </div>`;
-
-    document.getElementById('nn-cmp-expand-btn')?.addEventListener('click', () => {
-        localStorage.setItem(COMPACT_LS_KEY, 'false');
-        if (card) { card.classList.remove('nn-compact'); card.classList.remove('nn-compact-h'); }
-        const btn = document.getElementById('nn-btn-compact');
-        if (btn) btn.classList.remove('nn-btn-active');
-        renderCard();
-    });
-}
-
-
-
-// ─── WEIGHT TAB ───────────────────────────────────────────────
-function renderWeightTab(body) {
-    const u = state.user;
-    const b = getBotState();
-
-    // Определяем тренд по последним 5 записям юзера
-    function weightTrend(who) {
-        const entries = state.weightHistory.filter(e => e.who === who).slice(-5);
-        if (entries.length < 2) return 'stable';
-        const diff = entries[entries.length - 1].weight - entries[0].weight;
-        if (diff > 0.1)  return 'up';
-        if (diff < -0.1) return 'down';
-        return 'stable';
-    }
-
-    function trendIcon(t) {
-        if (t === 'up')   return '<span class="nn-trend-up">▲</span>';
-        if (t === 'down') return '<span class="nn-trend-down">▼</span>';
-        return '<span class="nn-trend-stable">●</span>';
-    }
-
-    function changeLabel(change) {
-        if (change > 0) return `<span class="nn-wh-gain">+${change.toFixed(2)} кг</span>`;
-        if (change < 0) return `<span class="nn-wh-loss">${change.toFixed(2)} кг</span>`;
-        return `<span class="nn-wh-neutral">без изм.</span>`;
-    }
-
-    function reasonClass(r) {
-        if (r === 'Переедание' || r === 'Лёгкий профицит') return 'nn-reason-surplus';
-        if (r === 'Сильный дефицит' || r === 'Умеренный дефицит') return 'nn-reason-deficit';
-        return 'nn-reason-normal';
-    }
-
-    // Карточки текущего веса
-    function weightCard(data, name, who, isUser) {
-        if (!data) return '';
-        const trend = weightTrend(who);
-        const icon = isUser ? '♛' : '♜';
-        const bmi = (data.weight / ((data.height / 100) ** 2)).toFixed(1);
-        let bmiLabel = 'Норма';
-        let bmiCls = 'nn-bmi-normal';
-        if (bmi < 18.5) { bmiLabel = 'Дефицит'; bmiCls = 'nn-bmi-low'; }
-        else if (bmi >= 25 && bmi < 30) { bmiLabel = 'Избыток'; bmiCls = 'nn-bmi-high'; }
-        else if (bmi >= 30) { bmiLabel = 'Ожирение'; bmiCls = 'nn-bmi-obese'; }
-
-        return `<div class="nn-weight-card">
-            <div class="nn-weight-card-name">${name} <span class="nn-char-name-icon">${icon}</span></div>
-            <div class="nn-weight-card-big">${data.weight} <span class="nn-weight-unit">кг</span> ${trendIcon(trend)}</div>
-            <div class="nn-weight-card-sub">
-                Рост: ${data.height} см  · 
-                ИМТ: <span class="${bmiCls}">${bmi} — ${bmiLabel}</span>
-            </div>
-        </div>`;
-    }
-
-    // История
-    const rows = [...state.weightHistory].reverse().map(e => {
-        const d = new Date(e.timestamp);
-        const dateStr = `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-        const ownerCls = e.who === 'user' ? 'nn-owner-user' : 'nn-owner-bot';
-        const calPct = Math.round((e.calories / e.calorieGoal) * 100);
-        return `<tr>
-            <td class="nn-wh-day">День ${e.day}</td>
-            <td class="${ownerCls} nn-wh-name">${e.name}</td>
-            <td class="nn-wh-weight">${e.weight} кг</td>
-            <td>${changeLabel(e.change)}</td>
-            <td><span class="nn-reason-pill ${reasonClass(e.reason)}">${e.reason}</span></td>
-            <td class="nn-wh-cal">${e.calories} / ${e.calorieGoal} ккал (${calPct}%)</td>
-            <td class="nn-wh-date">${dateStr}</td>
-        </tr>`;
-    }).join('') || `<tr><td colspan="7" class="nn-empty" style="text-align:center;padding:16px">История пуста — изменения веса появятся после смены игрового дня</td></tr>`;
-
-    body.innerHTML = `
-    <div class="nn-tab-content">
-        <div class="nn-section">
-            <div class="nn-section-header">
-                <span class="nn-section-icon">📅</span>
-                <span class="nn-section-title">Игровой день: <b style="color:var(--nn-accent)">${state.dayCount}</b></span>
-            </div>
-            <div class="nn-weight-cards-row">
-                ${weightCard(u, getUserName(), 'user', true)}
-                ${b ? weightCard(b, getBotName(), 'bot', false) : ''}
-            </div>
-        </div>
-
-        <div class="nn-section">
-            <div class="nn-section-header">
-                <span class="nn-section-icon">📊</span>
-                <span class="nn-section-title">История изменений веса</span>
-                <span class="nn-section-count">${state.weightHistory.length} зап.</span>
-            </div>
-            <div class="nn-section-body">
-                <p class="nn-help-text" style="margin-bottom:8px">
-                    Вес пересчитывается автоматически при смене игрового дня (когда ИИ указывает, что прошло ≥16 часов).
-                    Переедание (профицит >500 ккал/сутки) ведёт к набору, сильный дефицит (>800 ккал) — к потере.
-                </p>
-                <div class="nn-wh-table-wrap">
-                    <table class="nn-wh-table">
-                        <thead>
-                            <tr>
-                                <th>День</th>
-                                <th>Персонаж</th>
-                                <th>Вес</th>
-                                <th>Изменение</th>
-                                <th>Причина</th>
-                                <th>Калории</th>
-                                <th>Время</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>`;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// TAB RENDERS — PLACEHOLDERS (will be expanded in Stage 2-4)
-// ═══════════════════════════════════════════════════════════════
-
-function renderStatusBlock(data, charName, isUser) {
-    const immunity = calculateImmunity(data);
-    const immCls = immunity >= 60 ? 'nn-imm-good' : immunity >= 35 ? 'nn-imm-mid' : 'nn-imm-low';
-    const immLabel = immunity >= 60 ? 'Крепкий' : immunity >= 35 ? 'Ослаблен' : 'Слабый';
-
-    // Беременность
-    let pregHtml = '';
-    if (data.pregnant && data.pregnancyWeek > 0) {
-        const stage = getPregnancyStage(data.pregnancyWeek);
-        pregHtml = `<div class="nn-status-preg">
-            <span class="nn-status-preg-icon">🤰</span>
-            <div>
-                <b>${stage.label}</b> · неделя ${data.pregnancyWeek}
-                <div class="nn-status-preg-note">${stage.nausea ? 'Токсикоз · ' : ''}${stage.fatigue ? 'Повышенная усталость · ' : ''}Повышенная норма калорий и воды</div>
-            </div>
-        </div>`;
-    }
-
-    // Болезни
-    const sevLabels = { mild: 'Лёгкая', moderate: 'Средняя', severe: 'Тяжёлая', critical: 'Критическая' };
-    const diseasesHtml = data.diseases.length > 0
-        ? data.diseases.map(d => {
-            const effectsHtml = (d.effects || []).map(e =>
-                `<div class="nn-condition-effect"><span class="nn-condition-effect-name">⚡ ${e}</span></div>`).join('');
-            return `<div class="nn-condition-item nn-sev-${d.severity}">
-                <div class="nn-condition-top">
-                    <span class="nn-condition-name">⊘ ${d.name}</span>
-                    <span class="nn-severity-badge nn-sev-${d.severity}">${sevLabels[d.severity] || d.severity}</span>
-                    <span class="nn-condition-time">${d.recovering ? `выздоровление ~${diseaseRecoveryLeft(d)}ч` : (d.since || '')}</span>
-                </div>
-                <div class="nn-condition-effects">${effectsHtml}</div>
-            </div>`;
-        }).join('')
-        : '<span class="nn-empty">Нет заболеваний</span>';
-
-    // Баффы (с таймером остатка)
-    const buffsHtml = data.buffs.length > 0
-        ? data.buffs.map(bf => `<div class="nn-buff-item">
-            <div class="nn-buff-left"><span class="nn-buff-icon">${bf.icon || '✨'}</span><span class="nn-buff-name">${bf.name}${bf.hoursLeft != null ? ` <i>(~${Math.max(0.5, Math.round(bf.hoursLeft * 2) / 2)}ч)</i>` : ''}</span></div>
-            <span class="nn-buff-val">${bf.effect || ''}</span>
-        </div>`).join('')
-        : '<span class="nn-empty">Нет баффов</span>';
-
-    // Дебаффы
-    const debuffsHtml = data.debuffs.length > 0
-        ? data.debuffs.map(df => `<div class="nn-debuff-item">
-            <div class="nn-debuff-left"><span class="nn-debuff-icon">${df.icon || '☠'}</span><span class="nn-debuff-name">${df.name}${df.fading ? ` <i>(проходит, ~${Math.max(0.5, Math.round((df.fadeLeft || 0) * 2) / 2)}ч)</i>` : ''}</span></div>
-            <span class="nn-debuff-val">${df.effect || ''}</span>
-        </div>`).join('')
-        : '<span class="nn-empty">Нет дебаффов</span>';
-
-    const icon = isUser ? '♛' : '♜';
-
-    return `<div class="nn-status-char">
-        <div class="nn-status-char-header">
-            <span class="nn-status-char-name">${charName} <span class="nn-char-name-icon">${icon}</span></span>
-        </div>
-
-        <div class="nn-immunity-row">
-            <span>🛡 Иммунитет:</span>
-            <div class="nn-immunity-bar"><div class="nn-immunity-fill ${immCls}" style="width:${immunity}%"></div></div>
-            <span class="nn-immunity-val ${immCls}">${immunity}% · ${immLabel}</span>
-        </div>
-
-        ${pregHtml}
-
-        <div class="nn-section">
-            <div class="nn-section-header"><span class="nn-section-icon">⚠</span><span class="nn-section-title">Болезни</span></div>
-            <div class="nn-section-body">${diseasesHtml}</div>
-        </div>
-
-        <div class="nn-status-columns">
-            <div class="nn-section">
-                <div class="nn-section-header"><span class="nn-section-icon">✨</span><span class="nn-section-title">Баффы</span></div>
-                <div class="nn-section-body">${buffsHtml}</div>
-            </div>
-            <div class="nn-section">
-                <div class="nn-section-header"><span class="nn-section-icon">☠</span><span class="nn-section-title">Дебаффы</span></div>
-                <div class="nn-section-body">${debuffsHtml}</div>
-            </div>
-        </div>
-    </div>`;
-}
-
-// ─── PRODUCTS TAB ─────────────────────────────────────────────
-let prodWho = 'user';    // кто ест
-let prodCat = 'meat';    // открытая категория
-let prodSearch = '';     // поиск
-let prodSel = null;      // индекс выбранного продукта
-let prodGrams = null;    // выбранная граммовка
-
-function renderProductsTab(body) {
-    const botData = getBotState();
-    const search = prodSearch.trim().toLowerCase();
-
-    const items = PRODUCT_DB
-        .map((p, idx) => ({ p, idx }))
-        .filter(({ p }) => search ? p.name.toLowerCase().includes(search) : p.cat === prodCat);
-
-    const catCards = PRODUCT_CATEGORIES.map(c => `
-        <button class="nn-prod-cat ${(c.id === prodCat && !search) ? 'nn-prod-cat-active' : ''}" data-cat="${c.id}">
-            <span class="nn-prod-cat-ico">${c.icon}</span>
-            <span class="nn-prod-cat-name">${c.name}</span>
-        </button>`).join('');
-
-    const rows = items.map(({ p, idx }) => {
-        const unit = p.drink ? 'мл' : 'г';
-        const selected = prodSel === idx;
-        const grams = selected ? prodGrams : p.grams;
-        const cal = Math.round(p.cal100 * grams / 100);
-        const water = Math.round((p.water100 || 0) * grams / 100);
-
-        const chips = (p.drink ? [100, 200, 250, 330, 500] : [50, 100, 150, 200, 300])
-            .map(g => `<button class="nn-prod-chip ${g === grams ? 'nn-prod-chip-active' : ''}" data-g="${g}">${g}</button>`).join('');
-
-        const panel = selected ? `
-            <div class="nn-prod-panel">
-                <div class="nn-prod-gram-row">
-                    <button class="nn-prod-step" data-step="-25">−</button>
-                    <input type="number" class="nn-prod-gram-input" min="10" max="2000" step="5" value="${grams}">
-                    <span class="nn-prod-unit">${unit}</span>
-                    <button class="nn-prod-step" data-step="25">+</button>
-                </div>
-                <div class="nn-prod-chips">${chips}</div>
-                <button class="nn-prod-eat">${p.drink ? 'Выпить' : 'Съесть'} · ${cal} ккал${water > 0 ? ` · 💧+${water}%` : ''}</button>
-            </div>` : '';
-
-        return `<div class="nn-prod-row ${selected ? 'nn-prod-row-sel' : ''}" data-idx="${idx}">
-            <div class="nn-prod-row-top">
-                <span class="nn-prod-name">${p.name}</span>
-                <span class="nn-prod-cal">${p.grams} ${unit} · ${Math.round(p.cal100 * p.grams / 100)} ккал</span>
-            </div>
-            ${panel}
-        </div>`;
-    }).join('') || '<span class="nn-empty">Ничего не найдено</span>';
-
-    body.innerHTML = `
-    <div class="nn-tab-content">
-        <div class="nn-section">
-            <div class="nn-section-header">
-                <span class="nn-section-icon">🍽</span>
-                <span class="nn-section-title">Продукты</span>
-                <div class="nn-prod-who">
-                    <button class="nn-prod-who-btn ${prodWho === 'user' ? 'nn-prod-who-active' : ''}" data-who="user">${getUserName()}</button>
-                    <button class="nn-prod-who-btn ${prodWho === 'bot' ? 'nn-prod-who-active' : ''}" data-who="bot" ${botData ? '' : 'disabled'}>${getBotName()}</button>
-                </div>
-            </div>
-            <div class="nn-section-body">
-                <div class="nn-prod-cats">${catCards}</div>
-                <input type="text" id="nn-prod-search" class="nn-prod-search" placeholder="Поиск по всем категориям…" value="${prodSearch}">
-                <div class="nn-prod-list">${rows}</div>
-            </div>
-        </div>
-    </div>`;
-
-    body.querySelectorAll('.nn-prod-who-btn').forEach(btn => {
-        btn.addEventListener('click', () => { prodWho = btn.dataset.who; renderCardBody(); });
-    });
-    body.querySelectorAll('.nn-prod-cat').forEach(btn => {
-        btn.addEventListener('click', () => {
-            prodCat = btn.dataset.cat; prodSearch = ''; prodSel = null;
-            renderCardBody();
-        });
-    });
-    document.getElementById('nn-prod-search')?.addEventListener('input', (e) => {
-        prodSearch = e.target.value; prodSel = null;
-        renderCardBody();
-        const el = document.getElementById('nn-prod-search');
-        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
-    });
-
-    body.querySelectorAll('.nn-prod-row').forEach(row => {
-        const idx = parseInt(row.dataset.idx);
-        const p = PRODUCT_DB[idx];
-
-        // Клик по строке — открыть/закрыть панель граммовки
-        row.querySelector('.nn-prod-row-top').addEventListener('click', () => {
-            if (prodSel === idx) { prodSel = null; }
-            else { prodSel = idx; prodGrams = p.grams; }
-            renderCardBody();
-        });
-
-        const input = row.querySelector('.nn-prod-gram-input');
-        input?.addEventListener('change', (e) => {
-            const v = parseInt(e.target.value);
-            if (!isNaN(v) && v >= 10 && v <= 2000) { prodGrams = v; renderCardBody(); }
-        });
-        row.querySelectorAll('.nn-prod-step').forEach(btn => {
-            btn.addEventListener('click', () => {
-                prodGrams = Math.max(10, Math.min(2000, prodGrams + parseInt(btn.dataset.step)));
-                renderCardBody();
-            });
-        });
-        row.querySelectorAll('.nn-prod-chip').forEach(btn => {
-            btn.addEventListener('click', () => { prodGrams = parseInt(btn.dataset.g); renderCardBody(); });
-        });
-        row.querySelector('.nn-prod-eat')?.addEventListener('click', () => {
-            consumeProduct(p, prodWho, prodGrams);
-        });
-    });
-}
-
-function consumeProduct(p, who, grams) {
-    const data = who === 'bot' ? getBotState() : state.user;
-    if (!data) { notify('Персонаж не загружен', 'warning'); return; }
-
-    const cal = Math.round(p.cal100 * grams / 100);
-    const water = Math.round((p.water100 || 0) * grams / 100);
-
-    if (p.drink) {
-        if (cal > 0) data.calories += cal;
-        applyDrink(data, water);
-    } else {
-        applyMeal(data, cal, water);
-    }
-
-    evaluateConditions(data);
-    addToHistory(who, [`${p.name} ${grams}${p.drink ? 'мл' : 'г'}`], cal);
-
-    const whoName = who === 'bot' ? getBotName() : getUserName();
-    const parts = [];
-    if (cal > 0) parts.push(`+${cal} ккал`);
-    if (water > 0) parts.push(`+${water}% воды`);
-    notify(`${whoName}: ${p.name}, ${grams} ${p.drink ? 'мл' : 'г'}${parts.length ? ' (' + parts.join(', ') + ')' : ''}`, p.drink ? 'water' : 'food', 3500);
-
-    prodSel = null;
-    saveState();
-    renderCardBody();
-}
-
-
-function formatTimestamp(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mo = String(d.getMonth() + 1).padStart(2, '0');
-    return `${dd}.${mo} ${hh}:${mm}`;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SETTINGS TAB (inside the card)
-// ═══════════════════════════════════════════════════════════════
-function renderSettingsTab(body) {
-    body.innerHTML = `
-        <div class="nn-tab-content">
-            <div class="nn-section">
-                <div class="nn-section-header">
-                    <span class="nn-section-icon">🎨</span>
-                    <span class="nn-section-title">Внешний вид</span>
-                </div>
-                <div class="nn-section-body">
-                    <div class="nn-settings-row">
-                        <label>Тема оформления</label>
-                        <div class="nn-theme-picker">
-                            <button class="nn-theme-choice nn-dot-violet" data-theme="violet" title="Чёрно-фиолетовая"></button>
-                            <button class="nn-theme-choice nn-dot-rose" data-theme="rose" title="Бело-розовая"></button>
-                            <button class="nn-theme-choice nn-dot-adaptive" data-theme="adaptive" title="Адаптивная"></button>
-                        </div>
-                    </div>
-                    <div class="nn-settings-row">
-                        <label for="nn-set-bg">Фон карточки</label>
-                        <select id="nn-set-bg" class="nn-bg-select">
-                            ${(() => {
-                                const cur = localStorage.getItem(BG_LS_KEY) || 'bg.jpg';
-                                let opts = BG_PRESETS.map(f =>
-                                    `<option value="${f}" ${cur === f ? 'selected' : ''}>${f}</option>`
-                                ).join('');
-                                opts += `<option value="none" ${cur === 'none' ? 'selected' : ''}>Без фона</option>`;
-                                return opts;
-                            })()}
-                        </select>
-                    </div>
-                    <div class="nn-settings-row">
-                        <label for="nn-set-overlay">Затемнение фона</label>
-                        <input type="range" id="nn-set-overlay" min="0" max="100" step="5" value="${localStorage.getItem(BG_OVERLAY_LS_KEY) ?? '55'}">
-                        <span id="nn-set-overlay-val">${localStorage.getItem(BG_OVERLAY_LS_KEY) ?? '55'}%</span>
-                    </div>
-                    <p class="nn-help-text">
-                        По умолчанию используется картинка <b>bg.jpg</b> из папки <b>icons</b> расширения.
-                        Хочешь свой фон — скопируй картинку в ту же папку <b>icons</b> и впиши сюда её имя целиком,
-                        например <b>myfon.png</b>. Чтобы совсем убрать фон — впиши слово <b>none</b>.
-                        Ползунком ниже регулируется затемнение, чтобы текст было лучше видно.
-                    </p>
-                </div>
-            </div>
-
-            <div class="nn-section">
-                <div class="nn-section-header">
-                    <span class="nn-section-icon">⚙</span>
-                    <span class="nn-section-title">Основные</span>
-                </div>
-                <div class="nn-section-body">
-                    <div class="nn-settings-row">
-                        <label for="nn-set-enabled">Включить расширение</label>
-                        <input type="checkbox" id="nn-set-enabled" ${isEnabled() ? 'checked' : ''}>
-                    </div>
-                    <p class="nn-help-text">
-                        Параметры персонажей (пол, возраст, вес, норма калорий, беременность)
-                        настраиваются во вкладке «Обзор» — кнопка ⚙ на карточке персонажа.
-                    </p>
-                </div>
-            </div>
-
-<div class="nn-section">
-    <div class="nn-section-header">
-        <span class="nn-section-icon">🧪</span>
-        <span class="nn-section-title">Тест (отладка)</span>
-    </div>
-    <div class="nn-section-body">
-        <p class="nn-help-text" style="margin-bottom:8px">Все тесты применяются к <b>${getUserName()}</b>.</p>
-
-        <div class="nn-dbg-group-label">🦠 Гипогликемия</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button class="nn-set-btn" id="nn-dbg-hypo-mild">Лёгкая</button>
-            <button class="nn-set-btn" id="nn-dbg-hypo-mod">Средняя</button>
-            <button class="nn-set-btn" id="nn-dbg-hypo-sev">Тяжёлая</button>
-            <button class="nn-set-btn nn-set-btn-danger" id="nn-dbg-hypo-crit">Критическая</button>
-        </div>
-
-        <div class="nn-dbg-group-label">🦠 Истощение (голод)</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button class="nn-set-btn" id="nn-dbg-starv-mild">Лёгкое</button>
-            <button class="nn-set-btn" id="nn-dbg-starv-mod">Среднее</button>
-            <button class="nn-set-btn" id="nn-dbg-starv-sev">Тяжёлое</button>
-            <button class="nn-set-btn nn-set-btn-danger" id="nn-dbg-starv-crit">Критическое</button>
-        </div>
-
-        <div class="nn-dbg-group-label">🦠 Обезвоживание</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button class="nn-set-btn" id="nn-dbg-dehyd-mild">Лёгкое</button>
-            <button class="nn-set-btn" id="nn-dbg-dehyd-mod">Среднее</button>
-            <button class="nn-set-btn" id="nn-dbg-dehyd-sev">Тяжёлое</button>
-            <button class="nn-set-btn nn-set-btn-danger" id="nn-dbg-dehyd-crit">Критическое</button>
-        </div>
-
-        <div class="nn-dbg-group-label">🦠 Недоедание</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button class="nn-set-btn" id="nn-dbg-maln-mild">Лёгкое</button>
-            <button class="nn-set-btn" id="nn-dbg-maln-mod">Среднее</button>
-            <button class="nn-set-btn" id="nn-dbg-maln-sev">Тяжёлое</button>
-        </div>
-
-        <div class="nn-dbg-group-label">☠ Дебаффы</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button class="nn-set-btn" id="nn-dbg-debuff-hunger">🍽 Голод</button>
-            <button class="nn-set-btn" id="nn-dbg-debuff-dehy">💧 Жажда</button>
-            <button class="nn-set-btn" id="nn-dbg-debuff-exh">😴 Истощение</button>
-            <button class="nn-set-btn" id="nn-dbg-debuff-drow">💤 Сонливость</button>
-            <button class="nn-set-btn" id="nn-dbg-debuff-over">🤢 Переедание</button>
-        </div>
-
-        <div class="nn-dbg-group-label">✦ Баффы</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button class="nn-set-btn" id="nn-dbg-buff-fed">🍲 Сытость</button>
-            <button class="nn-set-btn" id="nn-dbg-buff-hyd">💧 Гидратация</button>
-            <button class="nn-set-btn" id="nn-dbg-buff-energy">⚡ Бодрость</button>
-        </div>
-
-        <div class="nn-dbg-group-label" style="margin-top:10px">⚙ Сброс</div>
-        <div class="nn-settings-row nn-settings-btns">
-            <button id="nn-dbg-clear" class="nn-set-btn">🧹 Очистить состояния</button>
-            <button id="nn-dbg-reset" class="nn-set-btn nn-set-btn-danger">↺ Сбросить всё</button>
-        </div>
-    </div>
-</div>
-        </div>
-    `;
-
-    // ─── Внешний вид ───
-    body.querySelectorAll('.nn-theme-choice').forEach(btn => {
-        btn.classList.toggle('nn-choice-active', btn.dataset.theme === getTheme());
-        btn.addEventListener('click', () => {
-            applyTheme(btn.dataset.theme);
-            body.querySelectorAll('.nn-theme-choice').forEach(b =>
-                b.classList.toggle('nn-choice-active', b.dataset.theme === getTheme()));
-        });
-    });
-
-    document.getElementById('nn-set-bg')?.addEventListener('change', (e) => {
-        const val = e.target.value;
-        localStorage.setItem(BG_LS_KEY, val);
-        applyCardBackground();
-        const msg = val === 'none' ? 'Фон убран' : `Фон: ${val}`;
-        notify(msg, 'info', 3000);
-    });
-
-    const overlaySlider = document.getElementById('nn-set-overlay');
-    overlaySlider?.addEventListener('input', (e) => {
-        document.getElementById('nn-set-overlay-val').textContent = e.target.value + '%';
-    });
-    overlaySlider?.addEventListener('change', (e) => {
-        localStorage.setItem(BG_OVERLAY_LS_KEY, e.target.value);
-        applyCardBackground();
-    });
-
-    // ─── Основные ───
-    document.getElementById('nn-set-enabled')?.addEventListener('change', (e) => {
-        setEnabled(e.target.checked);
-    });
-
-// ─── Отладочные кнопки ───
-
-// Хелпер: принудительно внедрить болезнь нужной стадии
-function dbgForceDisease(id, severity, statOverrides) {
-    const u = state.user;
-    u.diseases = u.diseases.filter(d => d.id !== id);
-    Object.assign(u, statOverrides);
-    const def = DISEASE_DB[id];
-    if (def && def.stages[severity]) {
-        u.diseases.push({
-            id, name: def.nameRu, nameEn: def.nameEn,
-            severity,
-            effects: def.stages[severity].effects,
-            effectsEn: def.stages[severity].effectsEn,
-            modifiers: def.stages[severity].modifiers,
-            symptoms: def.stages[severity].symptoms,
-            elapsedHours: 0, recoveryHours: 0, recovering: false, since: '0ч',
-        });
-    }
-    evaluateConditions(u);
-    saveState();
-    notify(`Тест: ${def?.nameRu || id} (${severity})`, 'disease', 3000);
-}
-
-// Хелпер: принудительно внедрить дебафф
-function dbgForceDebuff(id, name, icon, effect, effects) {
-    const u = state.user;
-    if (!u.debuffs.find(d => d.id === id)) {
-        u.debuffs.push({ id, name, icon, effect, effects, fading: false, fadeLeft: 0 });
-    }
-    evaluateConditions(u);
-    saveState();
-    notify(`Тест дебафф: ${name}`, 'debuff', 3000);
-}
-
-// Хелпер: принудительно внедрить бафф
-function dbgForceBuff(id, name, icon, effect) {
-    const u = state.user;
-    if (!u.buffs.find(b => b.id === id)) {
-        u.buffs.push({ id, name, icon, effect, hoursLeft: 5 });
-    }
-    evaluateConditions(u);
-    saveState();
-    notify(`Тест бафф: ${name}`, 'buff', 3000);
-}
-
-// ── Гипогликемия ──
-document.getElementById('nn-dbg-hypo-mild')?.addEventListener('click', () => {
-    dbgForceDisease('hypoglycemia', 'mild', { calories: 50, satiety: 15, hoursSinceLastMeal: 9 });
-});
-document.getElementById('nn-dbg-hypo-mod')?.addEventListener('click', () => {
-    dbgForceDisease('hypoglycemia', 'moderate', { calories: 0, satiety: 8, hoursSinceLastMeal: 15 });
-});
-document.getElementById('nn-dbg-hypo-sev')?.addEventListener('click', () => {
-    dbgForceDisease('hypoglycemia', 'severe', { calories: 0, satiety: 3, hoursSinceLastMeal: 23 });
-});
-document.getElementById('nn-dbg-hypo-crit')?.addEventListener('click', () => {
-    dbgForceDisease('hypoglycemia', 'critical', { calories: 0, satiety: 0, hoursSinceLastMeal: 37 });
-});
-
-// ── Истощение (голод) ──
-document.getElementById('nn-dbg-starv-mild')?.addEventListener('click', () => {
-    dbgForceDisease('starvation', 'mild', { calories: 0, satiety: 5, hoursSinceLastMeal: 25 });
-});
-document.getElementById('nn-dbg-starv-mod')?.addEventListener('click', () => {
-    dbgForceDisease('starvation', 'moderate', { calories: 0, satiety: 0, hoursSinceLastMeal: 49 });
-});
-document.getElementById('nn-dbg-starv-sev')?.addEventListener('click', () => {
-    dbgForceDisease('starvation', 'severe', { calories: 0, satiety: 0, hoursSinceLastMeal: 73, health: 40 });
-});
-document.getElementById('nn-dbg-starv-crit')?.addEventListener('click', () => {
-    dbgForceDisease('starvation', 'critical', { calories: 0, satiety: 0, hoursSinceLastMeal: 121, health: 15 });
-});
-
-// ── Обезвоживание ──
-document.getElementById('nn-dbg-dehyd-mild')?.addEventListener('click', () => {
-    dbgForceDisease('dehydration_disease', 'mild', { water: 24 });
-});
-document.getElementById('nn-dbg-dehyd-mod')?.addEventListener('click', () => {
-    dbgForceDisease('dehydration_disease', 'moderate', { water: 14 });
-});
-document.getElementById('nn-dbg-dehyd-sev')?.addEventListener('click', () => {
-    dbgForceDisease('dehydration_disease', 'severe', { water: 7 });
-});
-document.getElementById('nn-dbg-dehyd-crit')?.addEventListener('click', () => {
-    dbgForceDisease('dehydration_disease', 'critical', { water: 2 });
-});
-
-// ── Недоедание ──
-document.getElementById('nn-dbg-maln-mild')?.addEventListener('click', () => {
-    dbgForceDisease('malnutrition', 'mild', { calories: 0, satiety: 10, hoursSinceLastMeal: 25 });
-});
-document.getElementById('nn-dbg-maln-mod')?.addEventListener('click', () => {
-    dbgForceDisease('malnutrition', 'moderate', { calories: 0, satiety: 5, hoursSinceLastMeal: 49 });
-});
-document.getElementById('nn-dbg-maln-sev')?.addEventListener('click', () => {
-    dbgForceDisease('malnutrition', 'severe', { calories: 0, satiety: 0, hoursSinceLastMeal: 73, health: 35 });
-});
-
-// ── Дебаффы ──
-document.getElementById('nn-dbg-debuff-hunger')?.addEventListener('click', () => {
-    dbgForceDebuff('hunger', 'Голод', '🍽', '-20% Энергии', ['Энергия -20%', 'Концентрация -15%']);
-});
-document.getElementById('nn-dbg-debuff-dehy')?.addEventListener('click', () => {
-    dbgForceDebuff('dehydration', 'Жажда', '💧', '-15% Стамина', ['Стамина -15%', 'Концентрация -10%']);
-});
-document.getElementById('nn-dbg-debuff-exh')?.addEventListener('click', () => {
-    dbgForceDebuff('exhaustion', 'Истощение', '😴', '-30% Действия', ['Физические действия -30%', 'Фокус -25%']);
-});
-document.getElementById('nn-dbg-debuff-drow')?.addEventListener('click', () => {
-    dbgForceDebuff('drowsiness', 'Сонливость', '💤', '-10% Фокус', ['Фокус -10%', 'Реакция -10%']);
-});
-document.getElementById('nn-dbg-debuff-over')?.addEventListener('click', () => {
-    const u = state.user;
-    u.calories = Math.round(effectiveGoal(u) * 1.5);
-    dbgForceDebuff('overeating', 'Переедание', '🤢', '-10% Энергии', ['Вялость', 'Энергия -10%']);
-});
-
-// ── Баффы ──
-document.getElementById('nn-dbg-buff-fed')?.addEventListener('click', () => {
-    state.user.satiety = 85;
-    state.user.calories = Math.round(effectiveGoal(state.user) * 0.75);
-    dbgForceBuff('well_fed', 'Сытость', '🍲', '+0.8% энергии/ч · −15% траты энергии');
-});
-document.getElementById('nn-dbg-buff-hyd')?.addEventListener('click', () => {
-    state.user.water = 88;
-    dbgForceBuff('hydrated', 'Гидратация', '💧', '+0.3% энергии/ч · −10% траты воды');
-});
-document.getElementById('nn-dbg-buff-energy')?.addEventListener('click', () => {
-    state.user.energy = 92;
-    dbgForceBuff('high_energy', 'Бодрость', '⚡', '+0.3% здоровья/ч · −12% траты энергии');
-});
-
-// ── Сброс ──
-document.getElementById('nn-dbg-clear')?.addEventListener('click', () => {
-    const u = state.user;
-    u.diseases = []; u.buffs = []; u.debuffs = [];
-    u.satiety = 100; u.water = 100; u.energy = 100;
-    u.health = 100; u.calories = 0; u.hoursSinceLastMeal = 0;
-    saveState();
-    notify('Все состояния очищены', 'success', 2500);
-});
-
-document.getElementById('nn-dbg-reset')?.addEventListener('click', () => {
-    if (!confirm('Сбросить ВЕСЬ прогресс питания в этом чате?')) return;
-    chat_metadata[META_KEY] = defaultState();
-    loadState();
-    saveState();
-});
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-// DRAG — перетаскивание за края и углы карточки (только десктоп)
-// Слушатели движения вешаются на document — так надёжнее всего.
-// ═══════════════════════════════════════════════════════════════
-function makeDraggable(el, handle) {
-    if (!el) return;
-
-    const DRAG_EDGE = 28; // ширина рамки (px), за которую можно тащить
-    let dragging = false;
-    let startX, startY, origX, origY;
-
-    // Точка рядом с краем карточки?
-    function inEdge(e) {
-        if (window.innerWidth <= 768) {
-            // На мобилке тащим только за шапку и только в compact-режиме
-            const card = document.getElementById('nn-card');
-            if (card && card.classList.contains('nn-compact')) {
-                return !!e.target.closest('.nn-header');
-            }
-            return false;
-        }
-        const r = el.getBoundingClientRect();
-        const x = e.clientX - r.left;
-        const y = e.clientY - r.top;
-        return x <= DRAG_EDGE || x >= r.width - DRAG_EDGE
-            || y <= DRAG_EDGE || y >= r.height - DRAG_EDGE;
-    }
-
-    // Интерактивный элемент под курсором — не тащим
-    function isInteractive(e) {
-        return !!e.target.closest('button, input, select, textarea, a, .nn-tab');
-    }
-
-    // Движение во время перетаскивания (на уровне документа)
-    function onMove(e) {
-        if (!dragging) return;
-        let nx = origX + (e.clientX - startX);
-        let ny = origY + (e.clientY - startY);
-        nx = Math.max(0, Math.min(window.innerWidth - 120, nx));
-        ny = Math.max(0, Math.min(window.innerHeight - 60, ny));
-        el.style.left = nx + 'px';
-        el.style.top = ny + 'px';
-        e.preventDefault();
-    }
-
-    // Отпустили кнопку
-    function onUp() {
-        if (!dragging) return;
-        dragging = false;
-        el.style.cursor = '';
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        saveCardPos(el);
-    }
-
-    // Подсветка курсора при наведении на край
-    el.addEventListener('pointermove', (e) => {
-        if (dragging) return;
-        el.style.cursor = (!isInteractive(e) && inEdge(e)) ? 'grab' : '';
-    });
-
-    // Начало перетаскивания
-    el.addEventListener('pointerdown', (e) => {
-        if (isInteractive(e)) return;
-        if (!inEdge(e)) return;
-
-        dragging = true;
-        const r = el.getBoundingClientRect();
-        el.style.transform = 'none';
-        el.style.left = r.left + 'px';
-        el.style.top = r.top + 'px';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
-        origX = r.left;
-        origY = r.top;
-        startX = e.clientX;
-        startY = e.clientY;
-        el.style.cursor = 'grabbing';
-
-        document.addEventListener('pointermove', onMove);
-        document.addEventListener('pointerup', onUp);
-        e.preventDefault();
-    });
-}
-
-
-function saveCardPos(el) {
-    if (window.innerWidth <= 768) return;
-    const rect = el.getBoundingClientRect();
-    localStorage.setItem(POS_LS_KEY, JSON.stringify({ left: rect.left, top: rect.top }));
-}
-
-function restoreCardPos(el) {
-    // Мобилка + НЕ compact — CSS центрирует через flex, позицию не трогаем
-    if (window.innerWidth <= 768 && !el.classList.contains('nn-compact')) {
-        el.style.left = '';
-        el.style.top = '';
-        el.style.right = '';
-        el.style.bottom = '';
-        el.style.transform = '';
-        return;
-    }
-    // Мобилка + compact — CSS уже поставил позицию (10dvh / 4vw),
-    // восстанавливаем только если пользователь уже двигал карточку
-    const saved = localStorage.getItem(POS_LS_KEY);
-    if (!saved) {
-        if (window.innerWidth <= 768) return; // CSS сам расставит
-        // Десктоп, первый раз — по центру
-        el.style.left = '50%';
-        el.style.top = '50%';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
-        el.style.transform = 'translate(-50%, -50%)';
-        return;
-    }
-    try {
-        const { left, top } = JSON.parse(saved);
-        const nx = Math.max(0, Math.min(window.innerWidth - 200, left));
-        const ny = Math.max(0, Math.min(window.innerHeight - 100, top));
-        el.style.left = nx + 'px';
-        el.style.top = ny + 'px';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
-        el.style.transform = 'none';
-    } catch {}
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SETTINGS PANEL (Extensions sidebar — minimal)
-// ═══════════════════════════════════════════════════════════════
-function injectSettingsPanel() {
-    let attempts = 0;
-    const interval = setInterval(() => {
-        attempts++;
-        const container = document.querySelector('#extensions_settings2')
-                       || document.querySelector('#extensions_settings');
-        if (container) {
-            clearInterval(interval);
-            container.insertAdjacentHTML('beforeend', `
-                <div class="inline-drawer" id="nn-settings-drawer">
-                    <div class="inline-drawer-toggle inline-drawer-header">
-                        <b>Калории и питание</b>
-                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-                    </div>
-                    <div class="inline-drawer-content" id="nn-settings-content">
-                        <div class="nn-set-row">
-                            <label for="nn-chk-enabled">Включить расширение:</label>
-                            <input type="checkbox" id="nn-chk-enabled" ${isEnabled() ? 'checked' : ''}>
-                        </div>
-                        <p style="font-size:0.72rem;opacity:0.6;margin:8px 0 4px;">
-                            Все настройки — внутри карточки питания (кнопка 🍎 → шестерёнка ⚙ на карточке персонажа).
-                        </p>
-                    </div>
-                </div>
-            `);
-            const chk = document.getElementById('nn-chk-enabled');
-            if (chk) chk.addEventListener('change', () => setEnabled(chk.checked));
-        }
-        if (attempts >= 40) clearInterval(interval);
-    }, 250);
-}
-
-// ═══════════════════════════════════════════════════════════════
-// HISTORY — лог приёмов пищи
-// ═══════════════════════════════════════════════════════════════
-function addToHistory(who, items, calories) {
-    if (!state.history) state.history = [];
-    state.history.push({
-        who,       // 'user' | 'bot' | 'both'
-        items,     // ['bread', 'soup']
-        calories,
-        timestamp: Date.now(),
-    });
-    // Храним максимум 50 записей
-    if (state.history.length > 50) {
-        state.history = state.history.slice(-50);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// СНИМКИ СОСТОЯНИЯ — для отката при удалении сообщений
-// ═══════════════════════════════════════════════════════════════
-
-// Глубокая копия (простой и надёжный способ для обычных данных)
-function nnClone(obj) {
- return JSON.parse(JSON.stringify(obj));
-}
-
-// Сохраняем снимок текущих показателей. Привязываем к длине чата на
-// этот момент — так снимок можно будет опознать даже после удаления.
-function pushSnapshot() {
- if (!state) return;
- if (!Array.isArray(state.snapshots)) state.snapshots = [];
- state.snapshots.push({
- atLength: chat.length,
- user: nnClone(state.user),
- characters: nnClone(state.characters),
- lastGameTime: state.lastGameTime,
- lastProcessedMsgId: state.lastProcessedMsgId,
- });
- // храним максимум 40 снимков, чтобы не раздувать чат
- if (state.snapshots.length > 40) {
- state.snapshots = state.snapshots.slice(-40);
- }
-}
-
-// Откат к последнему живому снимку после удаления сообщения(ий)
-function rollbackToChatLength() {
- if (!state || !Array.isArray(state.snapshots) || state.snapshots.length === 0) return;
-
- const len = chat.length;
- // выбрасываем снимки, сделанные для уже удалённых сообщений
- state.snapshots = state.snapshots.filter(s => s.atLength <= len);
-
- const snap = state.snapshots[state.snapshots.length - 1];
- if (!snap) {
- // ничего не осталось — сбрасываем метку, чтобы следующий ответ пересчитался
- state.lastProcessedMsgId = null;
- saveState();
- return;
- }
-
- state.user = nnClone(snap.user);
- state.characters = nnClone(snap.characters);
- state.lastGameTime = snap.lastGameTime;
- state.lastProcessedMsgId = snap.lastProcessedMsgId;
-
- saveState();
- notify('Показатели откачены к удалённому сообщению', 'info', 3000);
+function restoreSnapshot(snap) {
+    const curUser = state.user;
+    const curChars = state.characters;
+    state.user = clone(snap.user);
+    state.characters = clone(snap.characters);
+    keepProfile(curUser, state.user);
+    for (const c of state.characters) keepProfile(curChars.find(x => x.charId === c.charId), c);
+    for (const c of curChars) if (!state.characters.find(x => x.charId === c.charId)) state.characters.push(c);
+    state.clockHours = snap.clockHours;
+    state.turn = snap.turn;
+    state.lastGameTime = snap.lastGameTime;
+    state.weightHistory = clone(snap.weightHistory || []);
+    state.history = clone(snap.history || []);
 }
 
 function onMessageDeleted() {
- if (!isEnabled() || !state) return;
- rollbackToChatLength();
+    if (!isEnabled() || !state) return;
+    const len = chat.length;
+    const affected = state.snapshots.filter(s => s.beforeMsg >= len).sort((a, b) => a.beforeMsg - b.beforeMsg);
+    state.manualLog = state.manualLog.filter(e => e.afterMsg < len);
+    if (affected.length) {
+        restoreSnapshot(affected[0]);
+        state.snapshots = state.snapshots.filter(s => s.beforeMsg < len);
+        saveState();
+        injectPrompt();
+        notify('Показатели откачены к удалённому сообщению', 'info', 2500);
+    }
+    scheduleRenderAll();
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CORE PROCESSING — обработка ответа ИИ
+// ВРЕМЯ: тик шагами ≤ 6ч, смена дня по накопленным игровым часам
 // ═══════════════════════════════════════════════════════════════
+function newCtx() {
+    const mk = () => ({ added: new Set(), removed: new Set(), progressed: new Set(), recovering: new Set(), events: new Set() });
+    return { user: mk(), bot: mk(), weight: [] };
+}
 
-function processAiResponse(text, messageId) {
-    if (!state || !text) return;
+function mergeCond(ctx, who, res) {
+    const t = ctx[who];
+    for (const id of res.added) { t.removed.delete(id); t.added.add(id); }
+    for (const id of res.removed) { if (t.added.has(id)) t.added.delete(id); else t.removed.add(id); }
+    for (const id of res.progressed) t.progressed.add(id);
+    for (const id of res.recovering) t.recovering.add(id);
+}
 
-    const msgIdNum = Number(messageId);
+function advanceTime(hours, activityOf, sleeping, offscreenFed, ctx) {
+    const chars = activeChars();
+    if (state.clockHours == null) state.clockHours = 12;
+    const feedOffscreen = offscreenFed && hours >= 12 && !sleeping;
+    let left = hours;
 
-    if (state.lastProcessedMsgId === msgIdNum) {
-        console.log('[NN] Swipe detected — skipping');
-        return;
+    while (left > 1e-6) {
+        const step = Math.min(6, left);
+        left -= step;
+
+        for (const ch of chars) {
+            const g = effectiveGoal(ch.data);
+            const burnedBefore = ch.data.burned || 0;
+            const r = tickTime(ch.data, step, activityOf[ch.who], sleeping, g);
+            r.events.forEach(e => ctx[ch.who].events.add(e));
+            if (feedOffscreen) {
+                // Большой пропуск времени: за кадром ели ровно столько, сколько потратили
+                applyMeal(ch.data, (ch.data.burned || 0) - burnedBefore, 0, g);
+                applyDrink(ch.data, step * 3.5 * SCENE_ACTIVITY[activityOf[ch.who]].strain, 0, g);
+            }
+        }
+
+        const prevDay = Math.floor(state.clockHours / 24);
+        state.clockHours += step;
+        const newDay = Math.floor(state.clockHours / 24);
+        for (let d = prevDay + 1; d <= newDay; d++) {
+            for (const ch of chars) rolloverDay(ch, d, ctx);
+        }
+
+        for (const ch of chars) mergeCond(ctx, ch.who, evaluateConditions(ch.data, step));
     }
+}
 
-    console.log('[NN] Processing AI response #' + msgIdNum);
+function rolloverDay(ch, endedDay, ctx) {
+    const c = ch.data;
+    const g = effectiveGoal(c);
+    const intake = r0(c.calories);
+
+    if (intake < g * 0.6) c.daysWithDeficit = (c.daysWithDeficit || 0) + 1;
+    else if (intake >= g * 0.85) c.daysWithDeficit = Math.max(0, (c.daysWithDeficit || 0) - 1);
+
+    // Итог дня: считаем по реальному балансу «съедено − сожжено»
+    const balance = intake - r0(c.burned);
+    let reason = 'Норма';
+    if (balance > 500) reason = 'Переедание';
+    else if (balance > 150) reason = 'Профицит';
+    else if (balance < -800) reason = 'Сильный дефицит';
+    else if (balance < -150) reason = 'Дефицит';
+
+    const start = c.dayStartWeight ?? c.weight;
+    const change = Math.round((c.weight - start) * 100) / 100;
+    state.weightHistory.push({
+        day: endedDay, who: ch.who, name: ch.name, weight: +c.weight.toFixed(2),
+        change, reason, calories: intake, burned: r0(c.burned), calorieGoal: g, timestamp: Date.now(),
+    });
+    if (state.weightHistory.length > 120) state.weightHistory = state.weightHistory.slice(-120);
+    if (Math.abs(change) >= 0.05) ctx.weight.push({ name: ch.name, change });
+
+    c.calories = 0;
+    c.burned = 0;
+    c.dayStartWeight = c.weight;
+    // Вес изменился — норма калорий тоже (если не задана вручную)
+    if (c.manualGoal == null) recalcGoal(c);
+}
+
+const dayNumber = () => Math.floor((state.clockHours ?? 12) / 24) + 1;
+
+function dayPart(clockHours) {
+    const h = Math.floor(((clockHours ?? 12) % 24 + 24) % 24);
+    if (h < 5) return ['ночь', 'night'];
+    if (h < 11) return ['утро', 'morning'];
+    if (h < 17) return ['день', 'daytime'];
+    if (h < 22) return ['вечер', 'evening'];
+    return ['ночь', 'night'];
+}
+function clockLabel(clockHours) {
+    if (clockHours == null) return '';
+    return `День ${Math.floor(clockHours / 24) + 1}, ${dayPart(clockHours)[0]}`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ОБРАБОТКА ОТВЕТА ИИ
+// ═══════════════════════════════════════════════════════════════
+const sumCal = (list) => list.reduce((a, x) => a + (x.calories || 0), 0);
+
+function consume(ch, foods, drinks, ctx) {
+    const c = ch.data, g = effectiveGoal(c);
+    const kcal = sumCal(foods) + sumCal(drinks);
+    // Резкое наедание после долгого голода — до применения еды
+    const rf = checkRefeeding(c, kcal, g);
+    if (rf && ctx) ctx[ch.who].added.add(rf);
+    if (foods.length) {
+        const water = Math.min(60, foods.reduce((a, f) => a + (f.water || 0), 0));
+        applyMeal(c, sumCal(foods), water, g);
+        addToHistory(ch.who, foods.map(f => f.item), sumCal(foods));
+    }
+    for (const d of drinks) {
+        const extras = d.alcoholG != null ? d : drinkExtras(d.item, d.ml || 250);
+        applyDrink(c, d.water, d.calories || 0, g, { alcoholG: extras.alcoholG || 0, caffeineMg: extras.caffeineMg || 0 });
+    }
+    return kcal;
+}
+
+function addToHistory(who, items, calories) {
+    state.history.push({ who, items, calories: r0(calories), clock: state.clockHours, timestamp: Date.now() });
+    if (state.history.length > 40) state.history = state.history.slice(-40);
+}
+
+function lastProcessedMsg() {
+    return state.snapshots.reduce((m, s) => Math.max(m, s.beforeMsg), -1);
+}
+
+function processAiResponse(messageId) {
+    const msg = chat[messageId];
+    if (!state || !msg || msg.is_user || msg.is_system || !msg.mes) return;
+    const N = Number(messageId);
+
+    // Повторная обработка того же ответа (свайп, регенерация, «продолжить», правка):
+    // сначала возвращаемся к состоянию ДО него, потом считаем заново.
+    const snap = state.snapshots.find(s => s.beforeMsg === N);
+    if (snap) restoreSnapshot(snap);
+    takeSnapshot(N);
+    state.turn = (state.turn || 0) + 1;
+
     setSilent(true);
-
-    // 1) Парсим тег
+    clearQueue();
+    const text = msg.mes;
     const tag = parseNnTag(text);
-    console.log('[NN] Tag:', tag ? JSON.stringify(tag) : 'NOT FOUND');
+    const ctx = newCtx();
 
-    // 2) Время
-    // Приоритет: tp из нашего тега. Дата (Horae/RP_DATE) — только запасной
-    // вариант, если тега нет. Дата ограничена 48 часами — защита от скачков
-    // календаря (разные форматы дат дают гигантскую разницу и обнуляют всё).
-    let hoursFromTag = tag?.tp ?? 0;
+    // ── Время ──
     let hoursFromDate = 0;
-
     const dateNow = parseGameTime(text);
     if (dateNow && state.lastGameTime != null) {
-        const diffMinutes = dateNow.totalMinutes - state.lastGameTime;
-        if (diffMinutes > 0) hoursFromDate = Math.min(diffMinutes / 60, 48);
+        const diff = dateNow.totalMinutes - state.lastGameTime;
+        if (diff > 0) hoursFromDate = Math.min(diff / 60, 48);
     }
-
-    // Определяем, сколько игровых часов прошло.
-    // Приоритет: 1) тег tp от ИИ, 2) игровая дата (Horae/RP_DATE),
-    // 3) запасное значение, если ИИ вообще ничего не сообщил —
-    //    иначе потребности «замерзают» навсегда.
     let hours;
-    if (tag && tag.tp != null) {
-        hours = hoursFromTag;              // тег есть — верим только ему
-    } else if (hoursFromDate > 0) {
-        hours = hoursFromDate;             // тега нет — берём игровую дату
-    } else {
-        hours = 0.5;                       // ничего нет — считаем, что прошло полчаса
-        console.log('[NN] Ни тега, ни даты — применяю запас 0.5ч, чтобы время шло');
-    }
-    console.log(`[NN] Time: tag=${hoursFromTag}h, date=${hoursFromDate.toFixed(1)}h, applied=${hours.toFixed(1)}h`);
-
+    if (tag && tag.tp != null) hours = tag.tp;
+    else if (hoursFromDate > 0) hours = hoursFromDate;
+    else hours = 0.5;
     if (dateNow && (state.lastGameTime == null || dateNow.totalMinutes > state.lastGameTime)) {
         state.lastGameTime = dateNow.totalMinutes;
     }
 
-    // 3) Активность и сон
-    const activity = tag?.activity || 'normal';
-    const sleeping = tag?.sleeping || false;
+    // Активность: отдельная для каждого из тега → общая из тега → по тексту
+    const sceneActivity = tag?.activity || detectActivity(text);
+    const activityOf = {
+        user: tag?.userActivity || sceneActivity,
+        bot: tag?.botActivity || sceneActivity,
+    };
+    const activitySource = (tag?.userActivity || tag?.botActivity || tag?.activity) ? 'tag' : 'text';
+    let sleeping = !!tag?.sleeping;
+    const offscreenFed = hours >= 24 ? tag?.offscreen !== 'hungry' : tag?.offscreen === 'fed';
 
-    // 4) Tick времени
-    if (hours > 0) {
-        const userResult = tickTime(state.user, hours, activity, sleeping, effectiveGoal(state.user));
-        if (userResult.events.includes('starving')) {
-            queueNotify(`${getUserName()} голодает — здоровье падает`, 'warning', 5000);
-        }
-        if (userResult.events.includes('dehydrated')) {
-            queueNotify(`${getUserName()} обезвожена — здоровье падает`, 'warning', 5000);
-        }
-        if (userResult.events.includes('weight_loss')) {
-            queueNotify(`${getUserName()} теряет вес от голода`, 'weight', 4000);
-        }
-
-        const botData = getBotState();
-        if (botData) {
-            const botResult = tickTime(botData, hours, activity, sleeping, effectiveGoal(botData));
-            if (botResult.events.includes('starving')) {
-                queueNotify(`${getBotName()} голодает — здоровье падает`, 'warning', 5000);
-            }
-            if (botResult.events.includes('dehydrated')) {
-                queueNotify(`${getBotName()} обезвожен — здоровье падает`, 'warning', 5000);
-            }
-            if (botResult.events.includes('weight_loss')) {
-                queueNotify(`${getBotName()} теряет вес от голода`, 'weight', 4000);
-            }
-        }
-
-
-        // Смена дня — сброс калорий + расчёт веса
-        if (hours >= 16) {
-            state.dayCount = (state.dayCount || 1) + 1;
-
-            const prevCal = resetDailyCalories(state.user);
-            const weightResult = updateWeight(state.user, prevCal);
-            const uGoal = effectiveGoal(state.user);
-
-            // Записываем в историю веса
-            const surplus = prevCal - uGoal;
-            let reason = 'Норма';
-            if (surplus > 500)        reason = 'Переедание';
-            else if (surplus > 0)     reason = 'Лёгкий профицит';
-            else if (surplus < -800)  reason = 'Сильный дефицит';
-            else if (surplus < -200)  reason = 'Умеренный дефицит';
-
-            state.weightHistory.push({
-                day: state.dayCount,
-                timestamp: Date.now(),
-                who: 'user',
-                name: getUserName(),
-                weight: state.user.weight,
-                change: weightResult.gained > 0 ? +weightResult.gained
-                      : weightResult.lost > 0 ? -weightResult.lost : 0,
-                reason,
-                calories: prevCal,
-                calorieGoal: uGoal,
-            });
-
-            if (weightResult.gained > 0.05) {
-                queueNotify(`Вес +${weightResult.gained} кг (переедание)`, 'weight', 4000);
-            }
-            if (weightResult.lost > 0.05) {
-                queueNotify(`Вес -${weightResult.lost} кг (дефицит)`, 'weight', 4000);
-            }
-
-            const botData = getBotState();
-            if (botData) {
-                const botPrev = resetDailyCalories(botData);
-                const botWeight = updateWeight(botData, botPrev);
-                const bGoal = effectiveGoal(botData);
-
-                const bSurplus = botPrev - bGoal;
-                let bReason = 'Норма';
-                if (bSurplus > 500)       bReason = 'Переедание';
-                else if (bSurplus > 0)    bReason = 'Лёгкий профицит';
-                else if (bSurplus < -800) bReason = 'Сильный дефицит';
-                else if (bSurplus < -200) bReason = 'Умеренный дефицит';
-
-                state.weightHistory.push({
-                    day: state.dayCount,
-                    timestamp: Date.now(),
-                    who: 'bot',
-                    name: getBotName(),
-                    weight: botData.weight,
-                    change: botWeight.gained > 0 ? +botWeight.gained
-                          : botWeight.lost > 0 ? -botWeight.lost : 0,
-                    reason: bReason,
-                    calories: botPrev,
-                    calorieGoal: bGoal,
-                });
-
-                if (botWeight.gained > 0.05) {
-                    queueNotify(`${getBotName()}: вес +${botWeight.gained} кг (переедание)`, 'weight', 4000);
-                }
-                if (botWeight.lost > 0.05) {
-                    queueNotify(`${getBotName()}: вес -${botWeight.lost} кг (дефицит)`, 'weight', 4000);
-                }
-            }
-
-            // Ограничиваем историю — 120 записей
-            if (state.weightHistory.length > 120) {
-                state.weightHistory = state.weightHistory.slice(-120);
-            }
-        }
-
-    }
-
-    // 5) Еда и питьё из тега
-    // Логика атрибуции:
-    //  • Если ИИ указал явные user_/bot_ поля — верим только им, общий ate/drank игнорируем.
-    //  • Если явных нет — общий ate/drank идёт ТОЛЬКО юзеру (он POV).
-    //  • Из еды/питья бота вычищаем позиции, дословно совпадающие с юзером (защита от дубля).
+    // ── Еда: из тега, а если его нет — оценка по тексту ──
+    const bot = getBotState();
+    let userFood = [], userDrink = [], botFood = [], botDrink = [];
+    let source = 'tag';
     if (tag) {
-        const botData = getBotState();
-
-        const hasExplicitAte = tag.userAte.length > 0 || tag.botAte.length > 0;
-        const hasExplicitDrank = tag.userDrank.length > 0 || tag.botDrank.length > 0;
-
-        // Итоговые списки
-        const userFood = hasExplicitAte ? tag.userAte : tag.ate;
-        const userDrink = hasExplicitDrank ? tag.userDrank : tag.drank;
-
-        // Ключи еды/питья юзера — чтобы не начислить то же самое боту
-        const userFoodKeys = new Set(userFood.map(f => f.item.toLowerCase().trim()));
-        const userDrinkKeys = new Set(userDrink.map(d => d.item.toLowerCase().trim()));
-        const botFood = tag.botAte.filter(f => !userFoodKeys.has(f.item.toLowerCase().trim()));
-        const botDrink = tag.botDrank.filter(d => !userDrinkKeys.has(d.item.toLowerCase().trim()));
-
-        // ── Еда юзера ──
-        if (userFood.length > 0) {
-            let totalCal = 0;
-            for (const food of userFood) {
-                applyMeal(state.user, food.calories, food.water);
-                totalCal += food.calories;
-            }
-            queueNotify(`${getUserName()} ест: ${userFood.map(f => f.item).join(', ')} (+${totalCal} ккал)`, 'food', 3500);
-            addToHistory('user', userFood.map(f => f.item), totalCal);
-        }
-
-        // ── Еда бота ──
-        if (botFood.length > 0 && botData) {
-            let totalCal = 0;
-            for (const food of botFood) {
-                applyMeal(botData, food.calories, food.water);
-                totalCal += food.calories;
-            }
-            queueNotify(`${getBotName()} ест: ${botFood.map(f => f.item).join(', ')} (+${totalCal} ккал)`, 'food', 3000);
-            addToHistory('bot', botFood.map(f => f.item), totalCal);
-        }
-
-        // ── Питьё юзера ──
-        if (userDrink.length > 0) {
-            for (const drink of userDrink) {
-                applyDrink(state.user, drink.water);
-            }
-            queueNotify(`${getUserName()} пьёт: ${userDrink.map(d => d.item).join(', ')}`, 'water', 3000);
-        }
-
-        // ── Питьё бота ──
-        if (botDrink.length > 0 && botData) {
-            for (const drink of botDrink) {
-                applyDrink(botData, drink.water);
-            }
-            queueNotify(`${getBotName()} пьёт: ${botDrink.map(d => d.item).join(', ')}`, 'water', 3000);
-        }
+        // Явное user_ate важнее общего ate; bot_ate на еду юзера не влияет
+        userFood = tag.userAte.length ? tag.userAte : tag.ate;
+        userDrink = tag.userDrank.length ? tag.userDrank : tag.drank;
+        if (bot) { botFood = tag.botAte; botDrink = tag.botDrank; }
+    } else {
+        const det = detectFromText(text);
+        userFood = det.meals; userDrink = det.drinks;
+        if (det.sleeping && hours >= 3) sleeping = true;
+        source = (det.meals.length || det.drinks.length) ? 'text' : 'none';
     }
 
-    // 6) Эвристика (если нет тега)
-    if (!tag) {
-        const detected = detectFromText(text);
-        if (detected.meals.length > 0) {
-            let totalCal = 0;
-            for (const food of detected.meals) {
-                applyMeal(state.user, food.calories, food.water);
-                totalCal += food.calories;
+    const weightBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.weight]));
+    const burnedBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.burned || 0]));
+    const dayBefore = Math.floor((state.clockHours ?? 12) / 24);
+    advanceTime(hours, activityOf, sleeping, offscreenFed, ctx);
+
+    const chars = activeChars();
+    const byWho = Object.fromEntries(chars.map(c => [c.who, c]));
+    const mealKcal = { user: consume(byWho.user, userFood, userDrink, ctx), bot: 0 };
+    if (byWho.bot) mealKcal.bot = consume(byWho.bot, botFood, botDrink, ctx);
+
+    // Рвота (болезнь, алкоголь, булимия)
+    const vomited = { user: !!tag?.userVomited, bot: !!(bot && tag?.botVomited) };
+    for (const ch of chars) {
+        if (!vomited[ch.who]) continue;
+        const lost = applyVomit(ch.data);
+        queueNotify(`${ch.name}: рвота${lost ? `, потеряно ~${lost} ккал` : ''}`, 'warning', 4000);
+    }
+    // События хода → эффекты (выспался, тревога после еды, стыд)
+    for (const ch of chars) {
+        const added = [];
+        applyTurnEvents(ch.data, { slept: sleeping ? hours : 0, mealKcal: mealKcal[ch.who], vomited: vomited[ch.who] }, added);
+        added.forEach(id => ctx[ch.who].added.add(id));
+    }
+    const foodInScene = mealKcal.user > 0 || mealKcal.bot > 0;
+
+    // Ручное кормление, сделанное после этого ответа, применяем заново
+    for (const e of state.manualLog.filter(x => x.afterMsg === N)) applyManual(e);
+
+    for (const ch of chars) mergeCond(ctx, ch.who, evaluateConditions(ch.data, 0));
+
+    // ── Уведомления ──
+    const uName = getUserName(), bName = getBotName();
+    const foodLine = (name, list) => `${name}: ${list.map(f => f.item).join(', ')} (+${sumCal(list)} ккал)`;
+    if (userFood.length) queueNotify(foodLine(uName, userFood) + (source === 'text' ? ' — оценка по тексту' : ''), 'food', 3500);
+    if (botFood.length) queueNotify(foodLine(bName, botFood), 'food', 3500);
+    if (userDrink.length) queueNotify(`${uName}: ${userDrink.map(d => d.item).join(', ')}`, 'water', 3000);
+    if (botDrink.length) queueNotify(`${bName}: ${botDrink.map(d => d.item).join(', ')}`, 'water', 3000);
+
+    for (const ch of chars) {
+        const t = ctx[ch.who];
+        const who = ch.name;
+        if (t.events.has('starving')) queueNotify(`${who} голодает — здоровье падает`, 'warning', 5000);
+        if (t.events.has('dehydrated')) queueNotify(`${who}: обезвоживание — здоровье падает`, 'warning', 5000);
+        for (const id of t.added) {
+            const d = ch.data.diseases.find(x => x.id === id);
+            if (d) {
+                queueNotify(`${who}: ${d.name} (${SEV_LABEL[d.severity]})`, isMentalDisease(id) ? 'mental' : 'disease', 6000);
+                continue;
             }
-            queueNotify(`Обнаружена еда: ${detected.meals.map(f => f.item).join(', ')} (+${totalCal} ккал)`, 'food', 3500);
-            addToHistory('user', detected.meals.map(f => f.item), totalCal);
-        }
-        if (detected.drinks.length > 0) {
-            for (const drink of detected.drinks) {
-                applyDrink(state.user, drink.water);
-            }
-            queueNotify(`Обнаружено питьё: ${detected.drinks.map(d => d.item).join(', ')}`, 'water', 3000);
-        }
-        if (detected.sleeping && hours > 0) {
-            const sleepBonus = Math.min(hours * 12, 100 - state.user.energy);
-            state.user.energy = Math.min(100, state.user.energy + sleepBonus);
-        }
-    }
-
-    // 7) Условия (продвинутая система)
-    const userCond = evaluateConditions(state.user, hours);
-
-    for (const id of userCond.added) {
-        const disease = state.user.diseases.find(d => d.id === id);
-        const debuff = state.user.debuffs.find(d => d.id === id);
-        const buff = state.user.buffs.find(b => b.id === id);
-
-        if (disease) queueNotify(`⚠ ${disease.name} (${disease.severity})`, 'disease', 6000);
-        else if (debuff) queueNotify(`Дебафф: ${debuff.name}`, 'debuff', 4000);
-        else if (buff) queueNotify(`Бафф: ${buff.name}`, 'buff', 3500);
-    }
-
-    for (const id of userCond.progressed) {
-        const disease = state.user.diseases.find(d => d.id === id);
-        if (disease) {
-            queueNotify(`⚠ ${disease.name} ухудшилась → ${disease.severity}`, 'disease', 6000);
-        }
-    }
-
-    for (const id of userCond.removed) {
-        queueNotify(`✧ Прошло: ${NN_ID_NAMES[id] || id}`, 'success', 4000);
-    }
-    for (const id of userCond.recovering) {
-        queueNotify(`✧ ${NN_ID_NAMES[id] || id}: началось выздоровление`, 'success', 4500);
-    }
-
-    const botData2 = getBotState();
-    if (botData2) {
-        const botCond = evaluateConditions(botData2, hours);
-
-        for (const id of botCond.added) {
-            const disease = botData2.diseases.find(d => d.id === id);
-            const debuff = botData2.debuffs.find(d => d.id === id);
-            const buff = botData2.buffs.find(b => b.id === id);
-
-            if (disease) queueNotify(`⚠ ${getBotName()}: ${disease.name} (${disease.severity})`, 'disease', 6000);
-            else if (debuff) queueNotify(`${getBotName()} — дебафф: ${debuff.name}`, 'debuff', 4000);
-            else if (buff) queueNotify(`${getBotName()} — бафф: ${buff.name}`, 'buff', 3500);
-        }
-
-        for (const id of botCond.progressed) {
-            const disease = botData2.diseases.find(d => d.id === id);
-            if (disease) {
-                queueNotify(`⚠ ${getBotName()}: ${disease.name} ухудшилась → ${disease.severity}`, 'disease', 6000);
+            const e = [...ch.data.debuffs, ...ch.data.buffs].find(x => x.id === id);
+            if (e) {
+                const v = effectView(e);
+                queueNotify(`${who}: ${v.name}`, v.kind === 'positive' ? 'buff' : 'debuff', 3500);
             }
         }
-
-        for (const id of botCond.removed) {
-            queueNotify(`✧ ${getBotName()}: прошло ${NN_ID_NAMES[id] || id}`, 'success', 4000);
+        for (const id of t.progressed) {
+            const d = ch.data.diseases.find(x => x.id === id);
+            if (d) queueNotify(`${who}: ${d.name} ухудшилась — ${SEV_LABEL[d.severity]}`, 'disease', 6000);
         }
-                for (const id of botCond.recovering) {
-            queueNotify(`✧ ${getBotName()}: ${NN_ID_NAMES[id] || id} — выздоровление`, 'success', 4500);
+        for (const id of t.recovering) queueNotify(`${who}: ${nameOf(id)} — началось выздоровление`, 'success', 4500);
+        for (const id of t.removed) {
+            // Мелкие эффекты при исчезновении не показываем — только болезни
+            if (DISEASE_DB[id]) queueNotify(`${who}: прошло — ${nameOf(id)}`, 'success', 4000);
         }
 
+        // Что «всплывёт» в следующем ответе
+        updateFocus(ch.data, state.turn, new Set([...t.added, ...t.progressed]), { foodInScene });
+    }
+    for (const w of ctx.weight) {
+        queueNotify(`${w.name}: вес ${w.change > 0 ? '+' : ''}${w.change.toFixed(2)} кг`, 'weight', 4000);
     }
 
- // 8) Сохраняем
- state.lastProcessedMsgId = msgIdNum;
- pushSnapshot(); // снимок показателей для отката при удалении сообщений
+    // ── Снимок для инфоблока этого сообщения ──
+    msg.extra = msg.extra || {};
+    msg.extra.nn = {
+        v: 3,
+        clock: state.clockHours,
+        user: viewOf(state.user),
+        bot: bot ? viewOf(bot) : null,
+        turn: {
+            hours, sleeping, source,
+            activity: activityOf, activitySource,
+            burned: Object.fromEntries(chars.map(ch => [ch.who,
+                // если в ходе была полночь, «сожжено за день» обнулилось — считаем по часам
+                Math.floor(state.clockHours / 24) === dayBefore
+                    ? r0((ch.data.burned || 0) - burnedBefore[ch.who])
+                    : r0(burnPerHour(ch.data, activityOf[ch.who], sleeping) * hours)])),
+            offscreen: offscreenFed && hours >= 12,
+            weightDelta: {
+                user: +(state.user.weight - weightBefore.user).toFixed(3),
+                bot: bot ? +(bot.weight - (weightBefore.bot ?? bot.weight)).toFixed(3) : 0,
+            },
+            userFood: slimItems(userFood), userDrink: slimItems(userDrink),
+            botFood: slimItems(botFood), botDrink: slimItems(botDrink),
+        },
+    };
 
- setSilent(false);
- flushQueue();
- saveState();
+    setSilent(false);
+    flushQueue();
+    saveState();
+    injectPrompt();
+    scheduleRenderAll();
+}
+
+function slimItems(list) {
+    return list.map(x => ({ item: x.item, calories: r0(x.calories), water: r0(x.water), ml: x.ml }));
+}
+
+function viewOf(c) {
+    return {
+        name: c === state.user ? getUserName() : c.name,
+        calories: r0(c.calories), goal: effectiveGoal(c), burned: r0(c.burned),
+        satiety: r0(c.satiety), water: r0(c.water), energy: r0(c.energy), health: r0(c.health),
+        weight: c.weight, height: c.height, age: c.age, gender: c.gender,
+        weightToday: +((c.weight - (c.dayStartWeight ?? c.weight))).toFixed(3),
+        pregnant: !!c.pregnant, pregnancyWeek: c.pregnancyWeek || 0,
+        hoursSinceLastMeal: c.hoursSinceLastMeal || 0,
+        immunity: calculateImmunity(c),
+        bac: +(c.bac || 0).toFixed(2),
+        ed: edList(c),
+        effects: [...c.debuffs, ...c.buffs].map(e => ({ id: e.id, ...effectView(e), fading: !!e.fading, fadeLeft: e.fadeLeft })),
+        diseases: c.diseases.map(d => ({
+            id: d.id, name: d.name, severity: d.severity, recovering: !!d.recovering,
+            category: DISEASE_DB[d.id]?.category || 'physical',
+            since: d.since, effects: d.effects || [],
+            left: d.recovering ? Math.max(0.5, r0((DISEASE_DB[d.id]?.recovery?.[d.severity] ?? 6) - (d.recoveryHours || 0))) : null,
+        })),
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════
-// EVENT HANDLERS
+// РУЧНОЕ КОРМЛЕНИЕ
 // ═══════════════════════════════════════════════════════════════
+function applyManual(e) {
+    const data = e.who === 'bot' ? getBotState() : state.user;
+    if (!data) return;
+    const g = effectiveGoal(data);
+    checkRefeeding(data, e.kcal, g);
+    if (e.drink) applyDrink(data, e.water, e.kcal, g, drinkExtras(e.name, e.grams));
+    else applyMeal(data, e.kcal, e.water, g);
+    applyTurnEvents(data, { mealKcal: e.kcal });
+}
+
+function consumeProduct(p, who, grams) {
+    const data = who === 'bot' ? getBotState() : state.user;
+    if (!data) { notify('Персонаж не загружен', 'warning', 3000, true); return; }
+
+    const kcal = Math.round(p.cal100 * grams / 100);
+    const water = Math.round((p.water100 || 0) * grams / 100);
+    const entry = { afterMsg: lastProcessedMsg(), who, name: p.name, grams, kcal, water, drink: !!p.drink };
+    applyManual(entry);
+    state.manualLog.push(entry);
+    if (state.manualLog.length > 100) state.manualLog = state.manualLog.slice(-100);
+
+    evaluateConditions(data, 0);
+    addToHistory(who, [`${p.name} ${grams}${p.drink ? 'мл' : 'г'}`], kcal);
+
+    const whoName = who === 'bot' ? getBotName() : getUserName();
+    const parts = [];
+    if (kcal > 0) parts.push(`+${kcal} ккал`);
+    if (water > 0) parts.push(`+${water}% воды`);
+    notify(`${whoName}: ${p.name}, ${grams} ${p.drink ? 'мл' : 'г'}${parts.length ? ' (' + parts.join(', ') + ')' : ''}`,
+        p.drink ? 'water' : 'food', 3000, true);
+
+    ui.prodSel = null;
+    saveState();
+    injectPrompt();
+    renderLiveBlock();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ПРОМПТ ДЛЯ ИИ
+// ═══════════════════════════════════════════════════════════════
+function levelWord(v, kind) {
+    const T = {
+        satiety: [[85, 'full'], [60, 'satisfied'], [35, 'peckish'], [15, 'hungry'], [-1, 'starving']],
+        water: [[80, 'well hydrated'], [55, 'hydration fine'], [30, 'thirsty'], [15, 'very thirsty'], [-1, 'severely dehydrated']],
+        energy: [[80, 'energetic'], [55, 'normal energy'], [30, 'tired'], [15, 'exhausted'], [-1, 'barely upright']],
+        health: [[80, 'healthy'], [55, 'unwell'], [30, 'weak'], [-1, 'critical']],
+    }[kind];
+    for (const [th, w] of T) if (v > th) return w;
+    return T[T.length - 1][1];
+}
+
+function getActionCapacity(c) {
+    // Психика влияет на поведение, но не на физическую способность действовать
+    const phys = c.diseases.filter(d => DISEASE_DB[d.id]?.category !== 'mental');
+    const crit = phys.some(d => !d.recovering && d.severity === 'critical');
+    const sev = phys.some(d => !d.recovering && d.severity === 'severe');
+    if (crit || c.health <= 15) return 'INCAPACITATED — cannot run, fight or stand for long; needs help from others.';
+    if (sev || c.energy <= 15 || c.health <= 35) return 'CRITICALLY WEAKENED — fleeing, fighting, climbing fail by default; at best a costly partial success.';
+    if (phys.length || c.energy <= 35 || c.satiety <= 20 || c.water <= 20) return 'WEAKENED — physical actions take visible strain; prolonged effort likely fails partway.';
+    return null;
+}
+
+function charPromptBlock(c, name, isUser) {
+    const lastMeal = c.hoursSinceLastMeal >= 1 ? `last meal ~${Math.round(c.hoursSinceLastMeal)}h ago` : 'ate recently';
+    const lines = [
+        `${name}${isUser ? ' (player character)' : ''}: ${levelWord(c.satiety, 'satiety')}, ${levelWord(c.water, 'water')}, ${levelWord(c.energy, 'energy')}, ${levelWord(c.health, 'health')}; ${lastMeal}; eaten today ≈${r0(c.calories)} of ~${effectiveGoal(c)} kcal.`,
+    ];
+    const cond = buildConditionPrompt(c, name, { isUser });
+    if (cond) lines.push(cond);
+    const cap = getActionCapacity(c);
+    if (cap) lines.push(`  Physical capacity: ${cap}`);
+    return lines.join('\n');
+}
+
+function buildSystemPrompt() {
+    if (!state) return '';
+    const u = state.user, b = getBotState();
+    const userName = getUserName(), botName = getBotName();
+
+    const anySurface = (u.focus?.length || 0) + (b?.focus?.length || 0) > 0;
+    const blocks = [charPromptBlock(u, userName, true)];
+    if (b) blocks.push(charPromptBlock(b, botName, false));
+    const anyEd = edList(u).length || (b && edList(b).length);
+    const timeLine = state.clockHours != null
+        ? `In-world time estimate: day ${dayNumber()}, ${dayPart(state.clockHours)[1]}.\n`
+        : '';
+
+    return `[Nutrition tracker — hidden physiological state. It is background context for the story, not its topic.]
+${timeLine}
+${blocks.join('\n\n')}
+
+How to use this:
+- ${anySurface ? 'Mention a physical state only where it is listed under "Surface in this reply".' : 'Nothing needs to surface in this reply.'} Anything under "Background only" stays unspoken unless the scene itself turns to food, drink, rest or hard physical effort.
+- When something surfaces, one short concrete detail inside the action or dialogue is enough — never a paragraph, never the opening or closing line.
+- Don't reuse a symptom, image or wording you already used in recent replies. Vary it or leave it out.
+- For ${userName}: show only outward signs; never decide their feelings, thoughts or actions.
+- Weakness still limits what bodies can actually do, even when it is not narrated.
+- Mental conditions show through behaviour, choices and dialogue — not through narrated diagnoses.${anyEd ? `\n- ${ED_GUIDANCE}` : ''}
+
+REQUIRED hidden tag — end every reply with exactly one line:
+<!-- NN tp=HOURS | activity=low|medium|high | user_ate=... | user_drank=... | bot_ate=... | bot_drank=... -->
+- tp: in-world hours since the previous reply (a few minutes = 0.2, an hour = 1, a night = 8).
+- activity — what the bodies mostly did during that time: low = sitting, talking, resting, light tasks; medium = walking, chores, cooking, handiwork, riding; high = running, fighting, heavy labour, climbing, a long march with a load. If ${userName} and ${botName} did different things, use user_activity=… and bot_activity=… instead.
+- sleeping=true only if the characters slept during this reply.
+- user_vomited=true / bot_vomited=true only if that character actually threw up in this reply.
+- Food: only what was actually eaten in this reply or described as eaten in ${userName}'s last message. Not food that was served, cooked, offered or talked about. If a meal continues from an earlier reply, list only the newly eaten part.
+- Write food as название:ККАЛ for the real portion — a bite ≈ 50, a snack ≈ 150–250, a plate ≈ 400–700, a feast ≈ 1000+. One entry per dish, comma-separated.
+- Write drinks as название:МЛ — a sip ≈ 30мл, a cup ≈ 200–250мл, a big mug ≈ 400мл.
+- user_… is ${userName}, bot_… is ${botName}. Leave out empty fields. Other NPCs are not tracked.
+- For time skips of a day or more, off-screen meals are assumed; add offscreen=hungry only if they truly had nothing to eat.
+Examples:
+<!-- NN tp=0.2 | activity=low -->
+<!-- NN tp=1 | activity=low | user_ate=борщ:320, ржаной хлеб:90 | user_drank=чай:200мл | bot_ate=борщ:320 -->
+<!-- NN tp=0.5 | user_activity=low | bot_activity=high -->
+<!-- NN tp=8 | activity=low | sleeping=true -->`;
+}
+
+function injectPrompt() {
+    const prompt = (isEnabled() && state) ? buildSystemPrompt() : '';
+    setExtensionPrompt(PROMPT_KEY, prompt, extension_prompt_types.IN_CHAT, 2, true, extension_prompt_roles.SYSTEM);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ИНФОБЛОК В СООБЩЕНИИ
+// ═══════════════════════════════════════════════════════════════
+const ui = {
+    open: new Map(),     // mesId → раскрыт ли блок
+    tab: new Map(),      // mesId → активная вкладка
+    who: 'user',         // чей профиль/кормление в живом блоке
+    prodCat: 'meat', prodSearch: '', prodSel: null, prodGrams: null,
+};
+
+const TABS = [
+    { id: 'overview', icon: 'fa-chart-simple', label: 'Обзор' },
+    { id: 'states', icon: 'fa-notes-medical', label: 'Состояния' },
+    { id: 'log', icon: 'fa-receipt', label: 'Журнал' },
+    { id: 'weight', icon: 'fa-weight-scale', label: 'Вес', live: true },
+    { id: 'feed', icon: 'fa-utensils', label: 'Покормить', live: true },
+    { id: 'params', icon: 'fa-sliders', label: 'Параметры', live: true },
+];
+
+function lastBotIndex() {
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (m && !m.is_user && !m.is_system) return i;
+    }
+    return -1;
+}
+const getMesEl = (id) => document.querySelector(`#chat .mes[mesid="${id}"]`);
+
+function liveSnap() {
+    const b = getBotState();
+    const lb = lastBotIndex();
+    return {
+        clock: state.clockHours,
+        user: viewOf(state.user),
+        bot: b ? viewOf(b) : null,
+        turn: lb >= 0 ? chat[lb]?.extra?.nn?.turn ?? null : null,
+    };
+}
+
+let renderTimer = null;
+function scheduleRenderAll() {
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(renderAllBlocks, 60);
+}
+function renderAllBlocks() {
+    if (!isEnabled()) { document.querySelectorAll('.nn-ib').forEach(b => b.remove()); return; }
+    if (!state && chat.length) loadState();
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => renderBlock(Number(el.getAttribute('mesid'))));
+}
+function renderLiveBlock() { renderBlock(lastBotIndex()); }
+
+function renderBlock(id) {
+    const el = getMesEl(id);
+    if (!el) return;
+    const msg = chat[id];
+    const live = id === lastBotIndex();
+    let block = el.querySelector('.nn-ib');
+    const snap = state && msg && !msg.is_user && !msg.is_system ? (live ? liveSnap() : msg.extra?.nn) : null;
+    const show = isEnabled() && snap && snap.user && (scopeAll() || live);
+
+    if (!show) { block?.remove(); return; }
+    if (!block) {
+        const anchor = el.querySelector('.mes_text');
+        if (!anchor) return;
+        block = document.createElement('div');
+        block.className = 'nn-ib';
+        anchor.insertAdjacentElement('afterend', block);
+        bindBlock(block);
+    }
+    block.dataset.mesid = String(id);
+    const open = ui.open.has(id) ? ui.open.get(id) : (live && expandLast());
+    block.classList.toggle('nn-open', open);
+    block.classList.toggle('nn-live', live);
+
+    let tab = ui.tab.get(id) || 'overview';
+    if (!live && TABS.find(t => t.id === tab)?.live) tab = 'overview';
+
+    // Сохраняем фокус поиска при перерисовке
+    const searchFocused = document.activeElement?.classList?.contains('nn-search');
+    block.innerHTML = headHtml(snap, open) + (open ? bodyHtml(snap, live, tab) : '');
+    if (searchFocused && open && tab === 'feed') {
+        const s = block.querySelector('.nn-search');
+        if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }
+}
+
+// ─── Хелперы разметки ─────────────────────────────────────────
+// Старые снимки хранили баффы/дебаффы отдельно — приводим к единому списку
+function effectsOf(v) {
+    if (v.effects) return v.effects;
+    return [...(v.debuffs || []), ...(v.buffs || [])].map(e => ({ id: e.id, ...effectView(e), fading: !!e.fading, fadeLeft: e.fadeLeft ?? e.hoursLeft }));
+}
+const physicalOf = (v) => v.diseases.filter(d => (d.category || 'physical') === 'physical');
+const mentalOf = (v) => v.diseases.filter(d => d.category === 'mental');
+const lvl = (v) => (v > 60 ? 'good' : v > 30 ? 'warn' : 'bad');
+const pct = (v) => Math.max(0, Math.min(100, r0(v)));
+
+function plural(n, forms) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return forms[2];
+    if (b > 1 && b < 5) return forms[1];
+    if (b === 1) return forms[0];
+    return forms[2];
+}
+function fmtH(h) {
+    if (h == null) return '';
+    if (h < 1) return `${Math.max(1, Math.round(h * 60))} мин`;
+    if (h >= 24) {
+        const d = Math.floor(h / 24), rest = Math.round(h % 24);
+        return rest ? `${d} д ${rest} ч` : `${d} д`;
+    }
+    return `${+h.toFixed(1)} ч`;
+}
+
+const kg = (w) => (Math.round((w || 0) * 10) / 10).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+function kgDelta(d, digits = 2) {
+    if (Math.abs(d) < 0.005) return '±0';
+    return (d > 0 ? '+' : '−') + Math.abs(d).toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function meter(icon, v, label) {
+    return `<span class="nn-m nn-${lvl(v)}" title="${label}: ${pct(v)}%">
+        <i class="fa-solid ${icon}"></i><span class="nn-m-track"><span style="width:${pct(v)}%"></span></span>
+    </span>`;
+}
+
+function fxBadges(v) {
+    let h = '';
+    const phys = physicalOf(v).length;
+    const mind = mentalOf(v).length + (v.ed?.length || 0);
+    const eff = effectsOf(v);
+    const neg = eff.filter(e => e.kind !== 'positive').length;
+    const pos = eff.filter(e => e.kind === 'positive').length;
+    if (phys) h += `<span class="nn-fx nn-bad" title="Физические болезни"><i class="fa-solid fa-virus"></i>${phys}</span>`;
+    if (mind) h += `<span class="nn-fx nn-mind" title="Психика"><i class="fa-solid fa-brain"></i>${mind}</span>`;
+    if (neg) h += `<span class="nn-fx nn-warn" title="Отрицательные эффекты"><i class="fa-solid fa-arrow-trend-down"></i>${neg}</span>`;
+    if (pos) h += `<span class="nn-fx nn-good" title="Положительные эффекты"><i class="fa-solid fa-arrow-trend-up"></i>${pos}</span>`;
+    return h;
+}
+
+function personChip(v, who) {
+    return `<span class="nn-chip">
+        ${avatarHtml(who, 'nn-av-sm')}
+        <span class="nn-chip-name">${esc(v.name)}</span>
+        <span class="nn-chip-kcal" title="Съедено за игровой день"><i class="fa-solid fa-fire-flame-curved"></i>${v.calories}<small>/${v.goal}</small></span>
+        <span class="nn-chip-meters">
+            ${meter('fa-utensils', v.satiety, 'Сытость')}
+            ${meter('fa-droplet', v.water, 'Вода')}
+            ${meter('fa-bolt', v.energy, 'Энергия')}
+            ${meter('fa-heart-pulse', v.health, 'Здоровье')}
+        </span>
+        ${fxBadges(v)}
+    </span>`;
+}
+
+function turnKcal(turn) {
+    if (!turn) return 0;
+    return [...turn.userFood, ...turn.botFood, ...turn.userDrink, ...turn.botDrink]
+        .reduce((a, x) => a + (x.calories || 0), 0);
+}
+
+function headHtml(snap, open) {
+    const t = snap.turn;
+    const delta = [];
+    if (t) {
+        delta.push(`<span title="Прошло игрового времени"><i class="fa-regular fa-clock"></i>${fmtH(t.hours)}</span>`);
+        if (t.sleeping) delta.push(`<span title="Сон"><i class="fa-solid fa-moon"></i></span>`);
+        else if (t.activity && typeof t.activity === 'object') {
+            const top = ['high', 'medium', 'low'].find(l => Object.values(t.activity).includes(l)) || 'low';
+            delta.push(`<span title="Активность: ${ACT_LABEL[top]}"><i class="fa-solid ${ACT_ICON[top]}"></i></span>`);
+        }
+        const kc = turnKcal(t);
+        if (kc > 0) delta.push(`<span title="Съедено и выпито в этом ответе"><i class="fa-solid fa-plus"></i>${kc}</span>`);
+        if (t.source !== 'tag') delta.push(`<span class="nn-warn" title="ИИ не оставил тег — значения оценены"><i class="fa-solid fa-triangle-exclamation"></i></span>`);
+    } else {
+        delta.push(`<span title="Стартовые значения по первой сцене — обновятся после следующего ответа"><i class="fa-solid fa-flag"></i>старт</span>`);
+    }
+    return `<div class="nn-head" role="button" tabindex="0" data-act="toggle" aria-expanded="${open}">
+        <span class="nn-people">${personChip(snap.user, 'user')}${snap.bot ? personChip(snap.bot, 'bot') : ''}</span>
+        <span class="nn-delta">${delta.join('')}</span>
+        <i class="fa-solid fa-chevron-down nn-chev"></i>
+    </div>`;
+}
+
+function bodyHtml(snap, live, tab) {
+    const tabs = TABS.filter(t => live || !t.live).map(t => `
+        <button class="nn-tab${t.id === tab ? ' nn-on' : ''}" data-act="tab" data-tab="${t.id}" role="tab" aria-selected="${t.id === tab}">
+            <i class="fa-solid ${t.icon}"></i><span>${t.label}</span>
+        </button>`).join('');
+
+    let pane = '';
+    switch (tab) {
+        case 'states': pane = statesPane(snap); break;
+        case 'log': pane = logPane(snap, live); break;
+        case 'weight': pane = weightPane(); break;
+        case 'feed': pane = feedPane(); break;
+        case 'params': pane = paramsPane(); break;
+        default: pane = overviewPane(snap);
+    }
+    const foot = [clockLabel(snap.clock)];
+    if (!live) foot.push('состояние на момент этого ответа');
+    return `<div class="nn-body">
+        <div class="nn-tabs" role="tablist">${tabs}</div>
+        <div class="nn-pane">${pane}</div>
+        <div class="nn-foot">${foot.filter(Boolean).map(esc).join('. ')}</div>
+    </div>`;
+}
+
+// ─── Обзор ────────────────────────────────────────────────────
+function statusOf(v) {
+    const phys = physicalOf(v);
+    if (phys.some(d => d.severity === 'critical' || d.severity === 'severe')) return ['Критично', 'fa-heart-crack', 'bad'];
+    if (phys.length || v.health < 40 || v.energy < 20) return ['Плохо', 'fa-face-dizzy', 'bad'];
+    if (v.satiety < 30 || v.water < 30 || effectsOf(v).some(e => e.kind === 'negative' && !e.fading)) return ['Напряжение', 'fa-triangle-exclamation', 'warn'];
+    if (v.health > 70 && v.energy > 60 && v.satiety > 50) return ['Здоров', 'fa-heart', 'good'];
+    return ['Стабильно', 'fa-heart', 'good'];
+}
+
+function statRow(icon, label, v) {
+    return `<div class="nn-row nn-${lvl(v)}">
+        <i class="fa-solid ${icon}"></i><span class="nn-row-label">${label}</span>
+        <span class="nn-bar"><span style="width:${pct(v)}%"></span></span>
+        <b class="nn-row-val">${pct(v)}%</b>
+    </div>`;
+}
+
+function personCard(v, who) {
+    const [stText, stIcon, stLvl] = statusOf(v);
+    const g = v.gender === 'male' ? 'fa-mars' : v.gender === 'female' ? 'fa-venus' : 'fa-genderless';
+    const kPct = v.goal ? Math.round(v.calories / v.goal * 100) : 0;
+    const kLvl = kPct > 130 ? 'over' : kPct < 30 ? 'bad' : kPct < 60 ? 'warn' : 'good';
+    const last = v.hoursSinceLastMeal >= 1 ? `последний приём ${fmtH(v.hoursSinceLastMeal)} назад` : 'ел(а) недавно';
+
+    let preg = '';
+    if (v.pregnant && v.gender !== 'male') {
+        const st = getPregnancyStage(v.pregnancyWeek);
+        preg = `<div class="nn-note"><i class="fa-solid fa-person-pregnant"></i><span>${esc(st.label)}, неделя ${v.pregnancyWeek || '—'}. ${esc(st.desc || '')}</span></div>`;
+    }
+    if (v.ed?.length) {
+        preg += `<div class="nn-note nn-note-mind"><i class="fa-solid fa-brain"></i><span>${v.ed.map(e => `${ED_DB[e.id].nameRu} (${ED_SEV_LABEL[e.severity]})`).join(', ')}</span></div>`;
+    }
+    return `<section class="nn-card">
+        <header class="nn-card-head">
+            ${avatarHtml(who, 'nn-av-lg')}
+            <div class="nn-card-id">
+                <div class="nn-card-name">${esc(v.name)}</div>
+                <div class="nn-card-sub"><i class="fa-solid ${g}"></i>${v.age} ${plural(v.age, ['год', 'года', 'лет'])}, ${v.height} см, ${kg(v.weight)} кг${v.weightToday != null && Math.abs(v.weightToday) >= 0.005 ? ` <span class="nn-mute">(${kgDelta(v.weightToday)} за день)</span>` : ''}</div>
+            </div>
+            <span class="nn-status nn-${stLvl}"><i class="fa-solid ${stIcon}"></i>${stText}</span>
+        </header>
+        <div class="nn-kcal nn-${kLvl}">
+            <div class="nn-kcal-num"><b>${v.calories}</b><span>из ${v.goal} ккал за день</span></div>
+            <span class="nn-bar nn-bar-thick"><span style="width:${Math.min(100, kPct)}%"></span></span>
+            <div class="nn-kcal-meta">сожжено ${v.burned} ккал, ${last}</div>
+        </div>
+        <div class="nn-rows">
+            ${statRow('fa-utensils', 'Сытость', v.satiety)}
+            ${statRow('fa-droplet', 'Вода', v.water)}
+            ${statRow('fa-bolt', 'Энергия', v.energy)}
+            ${statRow('fa-heart-pulse', 'Здоровье', v.health)}
+        </div>
+        ${preg}
+    </section>`;
+}
+
+function overviewPane(snap) {
+    return `<div class="nn-cards">${personCard(snap.user, 'user')}${snap.bot ? personCard(snap.bot, 'bot') : ''}</div>`;
+}
+
+// ─── Состояния ────────────────────────────────────────────────
+function diseaseItem(d) {
+    const time = d.recovering ? `выздоровление, ещё ~${d.left} ч` : (d.since ? `уже ${d.since}` : '');
+    const icon = d.category === 'mental' ? 'fa-brain' : 'fa-virus';
+    return `<div class="nn-cond nn-sev-${d.severity}${d.category === 'mental' ? ' nn-cond-mind' : ''}">
+        <i class="fa-solid ${icon}"></i>
+        <div class="nn-cond-main">
+            <div class="nn-cond-title">${esc(d.name)} <span class="nn-sev">${SEV_LABEL[d.severity] || ''}</span></div>
+            <div class="nn-cond-sub">${esc((d.effects || []).join(', '))}${time ? `. ${esc(time)}` : ''}</div>
+        </div>
+    </div>`;
+}
+
+function edItem(e) {
+    const def = ED_DB[e.id];
+    return `<div class="nn-cond nn-cond-mind nn-sev-${e.severity}">
+        <i class="fa-solid fa-brain"></i>
+        <div class="nn-cond-main">
+            <div class="nn-cond-title">${esc(def.nameRu)} <span class="nn-sev">${ED_SEV_LABEL[e.severity]}</span></div>
+            <div class="nn-cond-sub">Расстройство пищевого поведения — черта персонажа. Меняется во вкладке «Параметры».</div>
+        </div>
+    </div>`;
+}
+
+function effectItem(e) {
+    const left = e.fading ? Math.max(0.5, Math.round((e.fadeLeft || 0) * 2) / 2) : null;
+    const tail = left != null ? (e.timed ? `. Ещё ~${left} ч` : `. Проходит, ~${left} ч`) : '';
+    return `<div class="nn-cond nn-eff-${e.kind}${e.fading && !e.timed ? ' nn-fading' : ''}">
+        <i class="fa-solid ${e.icon}"></i>
+        <div class="nn-cond-main">
+            <div class="nn-cond-title">${esc(e.name)}${e.mental ? ' <span class="nn-sev">психика</span>' : ''}</div>
+            <div class="nn-cond-sub">${esc(e.text || '')}${tail}</div>
+        </div>
+    </div>`;
+}
+
+function statesFor(v, who) {
+    const phys = physicalOf(v).map(diseaseItem).join('');
+    const mind = [...(v.ed || []).map(edItem), ...mentalOf(v).map(diseaseItem)].join('');
+    const eff = effectsOf(v).slice().sort((a, b) => ({ negative: 0, neutral: 1, positive: 2 }[a.kind] - { negative: 0, neutral: 1, positive: 2 }[b.kind]));
+    const imm = v.immunity;
+    const bac = v.bac >= 0.1 ? `<div class="nn-row nn-${v.bac >= 1.8 ? 'bad' : v.bac >= 0.9 ? 'warn' : 'good'}">
+            <i class="fa-solid fa-wine-glass"></i><span class="nn-row-label">Алкоголь</span>
+            <span class="nn-bar"><span style="width:${Math.min(100, v.bac / 3 * 100)}%"></span></span><b class="nn-row-val">${v.bac.toFixed(1)}‰</b>
+        </div>` : '';
+    return `<section class="nn-card">
+        <header class="nn-card-head">${avatarHtml(who, 'nn-av-lg')}<div class="nn-card-id"><div class="nn-card-name">${esc(v.name)}</div></div></header>
+        <div class="nn-row nn-${lvl(imm)}">
+            <i class="fa-solid fa-shield-halved"></i><span class="nn-row-label">Иммунитет</span>
+            <span class="nn-bar"><span style="width:${pct(imm)}%"></span></span><b class="nn-row-val">${pct(imm)}%</b>
+        </div>
+        ${bac}
+        <h5 class="nn-sub-h"><i class="fa-solid fa-virus"></i>Физические болезни</h5>
+        <div class="nn-conds">${phys || '<div class="nn-empty">Нет.</div>'}</div>
+        <h5 class="nn-sub-h"><i class="fa-solid fa-brain"></i>Психика</h5>
+        <div class="nn-conds">${mind || '<div class="nn-empty">Нет.</div>'}</div>
+        <h5 class="nn-sub-h"><i class="fa-solid fa-wand-magic-sparkles"></i>Активные эффекты</h5>
+        <div class="nn-conds">${eff.map(effectItem).join('') || '<div class="nn-empty">Нет.</div>'}</div>
+    </section>`;
+}
+
+function statesPane(snap) {
+    return `<div class="nn-cards">${statesFor(snap.user, 'user')}${snap.bot ? statesFor(snap.bot, 'bot') : ''}</div>`;
+}
+
+// ─── Журнал ───────────────────────────────────────────────────
+function itemsList(name, foods, drinks) {
+    if (!foods.length && !drinks.length) return '';
+    const f = foods.map(x => `<li><i class="fa-solid fa-utensils"></i><span>${esc(x.item)}</span><b>${x.calories} ккал</b></li>`);
+    const d = drinks.map(x => `<li><i class="fa-solid fa-glass-water"></i><span>${esc(x.item)}${x.ml ? `, ${x.ml} мл` : ''}</span><b>${x.calories ? `${x.calories} ккал, ` : ''}+${x.water}% воды</b></li>`);
+    return `<div class="nn-log-who">${esc(name)}</div><ul class="nn-log-list">${f.join('')}${d.join('')}</ul>`;
+}
+
+function logPane(snap, live) {
+    const t = snap.turn;
+    let turnHtml;
+    if (!t) {
+        turnHtml = live
+            ? '<div class="nn-empty">Пока это стартовые значения — они определены по первой сцене и карточкам. Первый расчёт будет после следующего ответа бота.</div>'
+            : '<div class="nn-empty">Для этого сообщения расчёта не было — это приветствие или ответ из старой версии.</div>';
+    } else {
+        const meta = [`<span><i class="fa-regular fa-clock"></i>прошло ${fmtH(t.hours)}</span>`];
+        if (t.sleeping) meta.push('<span><i class="fa-solid fa-moon"></i>сон</span>');
+        // активность и расход по каждому персонажу (в старых снимках активность одна строкой)
+        const actOf = (who) => (typeof t.activity === 'string' ? t.activity : t.activity?.[who]) || 'low';
+        const people = [['user', snap.user], ...(snap.bot ? [['bot', snap.bot]] : [])];
+        for (const [who, v] of people) {
+            const a = actOf(who);
+            const lvl2 = ACT_LABEL[a] ? a : 'low';
+            const burned = t.burned?.[who];
+            meta.push(`<span title="${t.activitySource === 'text' ? 'Активность определена по тексту' : 'Активность из тега ИИ'}"><i class="fa-solid ${t.sleeping ? 'fa-bed' : (ACT_ICON[lvl2] || ACT_ICON.low)}"></i>${esc(v.name)}: ${t.sleeping ? 'сон' : ACT_LABEL[a] || a}${burned != null ? `, −${burned} ккал` : ''}</span>`);
+        }
+        const notes = [];
+        if (t.offscreen) notes.push('Пропуск времени: обычные приёмы пищи за кадром учтены автоматически.');
+        if (t.source === 'text') notes.push('ИИ не оставил тег — еда найдена в тексте и оценена по базе продуктов.');
+        if (t.source === 'none') notes.push('ИИ не оставил тег — время посчитано условно (30 минут).');
+        const lists = itemsList(snap.user.name, t.userFood, t.userDrink)
+            + (snap.bot ? itemsList(snap.bot.name, t.botFood, t.botDrink) : '');
+        const wd = t.weightDelta;
+        if (wd) {
+            const parts = [`${esc(snap.user.name)} ${kgDelta(wd.user, 3)} кг`];
+            if (snap.bot) parts.push(`${esc(snap.bot.name)} ${kgDelta(wd.bot, 3)} кг`);
+            meta.push(`<span title="Изменение веса за этот ход"><i class="fa-solid fa-weight-scale"></i>${parts.join(', ')}</span>`);
+        }
+        turnHtml = `<div class="nn-log-meta">${meta.join('')}</div>
+            ${notes.map(n => `<div class="nn-note nn-warn"><i class="fa-solid fa-circle-info"></i><span>${n}</span></div>`).join('')}
+            ${lists || '<div class="nn-empty">В этом ответе никто не ел и не пил.</div>'}`;
+    }
+
+    let hist = '';
+    if (live && state.history.length) {
+        const rows = [...state.history].reverse().slice(0, 10).map(h => {
+            const name = h.who === 'bot' ? getBotName() : getUserName();
+            return `<li><span class="nn-log-when">${esc(clockLabel(h.clock) || '')}</span><span>${esc(name)}: ${esc(h.items.join(', '))}</span><b>${h.calories} ккал</b></li>`;
+        }).join('');
+        hist = `<h4 class="nn-h">Недавние приёмы пищи</h4><ul class="nn-log-list nn-log-hist">${rows}</ul>`;
+    }
+    return `<h4 class="nn-h">В этом ответе</h4>${turnHtml}${hist}`;
+}
+
+// ─── Вес ──────────────────────────────────────────────────────
+function weightPane() {
+    const card = (c, who) => {
+        if (!c) return '';
+        const entries = state.weightHistory.filter(e => e.who === who).slice(-5);
+        let trend = ['fa-equals', 'стабильно'];
+        if (entries.length >= 2) {
+            const diff = entries[entries.length - 1].weight - entries[0].weight;
+            if (diff > 0.1) trend = ['fa-arrow-trend-up', 'растёт'];
+            else if (diff < -0.1) trend = ['fa-arrow-trend-down', 'снижается'];
+        }
+        const bmi = c.weight / ((c.height / 100) ** 2);
+        let bmiLabel = 'норма', bl = 'good';
+        if (bmi < 18.5) { bmiLabel = 'дефицит'; bl = 'warn'; }
+        else if (bmi >= 30) { bmiLabel = 'ожирение'; bl = 'bad'; }
+        else if (bmi >= 25) { bmiLabel = 'избыток'; bl = 'warn'; }
+        const today = c.weight - (c.dayStartWeight ?? c.weight);
+        const buf = Math.round((c.reserve || 0) / reserveCap(effectiveGoal(c)) * 100);
+        return `<section class="nn-card">
+            <header class="nn-card-head">${avatarHtml(who, 'nn-av-lg')}<div class="nn-card-id"><div class="nn-card-name">${esc(c.name)}</div></div>
+                <span class="nn-status"><i class="fa-solid ${trend[0]}"></i>${trend[1]}</span></header>
+            <div class="nn-kcal-num"><b>${kg(c.weight)}</b><span>кг, сегодня ${kgDelta(today)} кг</span></div>
+            <div class="nn-kcal-meta">ИМТ ${bmi.toFixed(1)} — <span class="nn-${bl}-text">${bmiLabel}</span>. Рост ${c.height} см.</div>
+            <div class="nn-row nn-${buf > 85 ? 'warn' : buf < 10 ? 'bad' : 'good'}" title="Когда запас полон — лишнее идёт в вес; когда пуст — вес уходит">
+                <i class="fa-solid fa-battery-half"></i><span class="nn-row-label">Запас</span>
+                <span class="nn-bar"><span style="width:${Math.min(100, buf)}%"></span></span><b class="nn-row-val">${buf}%</b>
+            </div>
+        </section>`;
+    };
+    const rows = [...state.weightHistory].reverse().slice(0, 30).map(e => {
+        const ch = Math.abs(e.change) < 0.005 ? '<span class="nn-mute">±0</span>'
+            : `<span class="${e.change > 0 ? 'nn-warn-text' : 'nn-good-text'}">${kgDelta(e.change)}</span>`;
+        return `<tr><td>${e.day}</td><td>${esc(e.name)}</td><td>${kg(e.weight)} кг</td><td>${ch}</td><td>${esc(e.reason)}</td><td>${e.calories}${e.burned != null ? ` / −${e.burned}` : `/${e.calorieGoal}`}</td></tr>`;
+    }).join('');
+    return `<div class="nn-cards">${card(state.user, 'user')}${card(getBotState(), 'bot')}</div>
+        <h4 class="nn-h">История по дням</h4>
+        ${rows ? `<div class="nn-table-wrap"><table class="nn-table">
+            <thead><tr><th>День</th><th>Кто</th><th>Вес</th><th>За день</th><th>Итог</th><th>Съедено / сожжено</th></tr></thead>
+            <tbody>${rows}</tbody></table></div>`
+        : '<div class="nn-empty">Записи появятся после первой игровой полуночи. Сейчас идёт день ' + dayNumber() + '.</div>'}
+        <p class="nn-hint">Вес меняется в каждом ответе. Сначала еда и расход двигают запас энергии; когда он полон, лишнее откладывается в вес (7700 ккал ≈ 1 кг), когда пуст — вес уходит. При полном голоде теряются ещё вода и мышцы.</p>`;
+}
+
+// ─── Покормить ────────────────────────────────────────────────
+function whoSwitch() {
+    const b = getBotState();
+    return `<div class="nn-seg" role="group">
+        <button class="${ui.who === 'user' ? 'nn-on' : ''}" data-act="who" data-who="user">${esc(getUserName())}</button>
+        <button class="${ui.who === 'bot' ? 'nn-on' : ''}" data-act="who" data-who="bot" ${b ? '' : 'disabled'}>${esc(getBotName())}</button>
+    </div>`;
+}
+
+function prodListHtml() {
+    const q = ui.prodSearch.trim().toLowerCase();
+    const items = PRODUCT_DB.map((p, idx) => ({ p, idx }))
+        .filter(({ p }) => q ? p.name.toLowerCase().includes(q) : p.cat === ui.prodCat);
+    if (!items.length) return '<div class="nn-empty">Ничего не нашлось. Попробуйте другое слово.</div>';
+
+    return items.map(({ p, idx }) => {
+        const unit = p.drink ? 'мл' : 'г';
+        const sel = ui.prodSel === idx;
+        const grams = sel ? ui.prodGrams : p.grams;
+        const kcal = Math.round(p.cal100 * grams / 100);
+        const water = Math.round((p.water100 || 0) * grams / 100);
+        const chips = (p.drink ? [100, 200, 250, 330, 500] : [50, 100, 150, 200, 300])
+            .map(g => `<button class="nn-pchip${g === grams ? ' nn-on' : ''}" data-act="grams" data-g="${g}">${g}</button>`).join('');
+        return `<div class="nn-prod${sel ? ' nn-on' : ''}">
+            <button class="nn-prod-row" data-act="prod" data-idx="${idx}">
+                <span>${esc(p.name)}</span><span class="nn-mute">${p.grams} ${unit}, ${Math.round(p.cal100 * p.grams / 100)} ккал</span>
+            </button>
+            ${sel ? `<div class="nn-prod-panel">
+                <div class="nn-grams">
+                    <button data-act="step" data-step="-25" aria-label="Меньше"><i class="fa-solid fa-minus"></i></button>
+                    <input type="number" class="nn-grams-input" min="10" max="2000" step="5" value="${grams}" aria-label="Количество">
+                    <span>${unit}</span>
+                    <button data-act="step" data-step="25" aria-label="Больше"><i class="fa-solid fa-plus"></i></button>
+                    <span class="nn-pchips">${chips}</span>
+                </div>
+                <button class="nn-btn nn-btn-main" data-act="eat" data-idx="${idx}">
+                    <i class="fa-solid ${p.drink ? 'fa-glass-water' : 'fa-utensils'}"></i>
+                    ${p.drink ? 'Выпить' : 'Съесть'}: ${kcal} ккал${water > 0 ? `, +${water}% воды` : ''}
+                </button>
+            </div>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function feedPane() {
+    const cats = PRODUCT_CATEGORIES.map(c => `
+        <button class="nn-cat${c.id === ui.prodCat && !ui.prodSearch ? ' nn-on' : ''}" data-act="cat" data-cat="${c.id}">
+            <i class="fa-solid ${c.icon}"></i><span>${c.name}</span>
+        </button>`).join('');
+    return `<div class="nn-feed-top">${whoSwitch()}
+            <label class="nn-search-wrap"><i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" class="nn-search text_pole" placeholder="Поиск по всем продуктам" value="${esc(ui.prodSearch)}"></label>
+        </div>
+        <div class="nn-cats">${cats}</div>
+        <div class="nn-prod-list">${prodListHtml()}</div>
+        <p class="nn-hint">Необязательно: ИИ сам считает еду из сцены. Здесь можно докормить вручную — это запомнится и не пропадёт при свайпе.</p>`;
+}
+
+// ─── Параметры ────────────────────────────────────────────────
+function paramsPane() {
+    const data = ui.who === 'bot' ? getBotState() : state.user;
+    if (!data) return `${whoSwitch()}<div class="nn-empty">Персонаж не загружен.</div>`;
+    const opt = (entries, cur) => entries.map(([k, l]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${l}</option>`).join('');
+    const auto = calculateCalorieGoal({
+        gender: data.gender, weight: data.weight, height: data.height, age: data.age,
+        activity: data.activity, build: data.build, pregnant: data.pregnant, pregnancyWeek: data.pregnancyWeek,
+    });
+    const manual = data.manualGoal != null;
+
+    return `${whoSwitch()}
+    <div class="nn-form">
+        <label>Пол<select class="text_pole" data-field="gender">${opt([['male', 'Мужской'], ['female', 'Женский'], ['unknown', 'Не указан']], data.gender)}</select></label>
+        <label>Возраст<input class="text_pole" type="number" data-field="age" min="16" max="99" value="${data.age}"></label>
+        <label>Рост, см<input class="text_pole" type="number" data-field="height" min="120" max="230" value="${data.height}"></label>
+        <label>Вес, кг<input class="text_pole" type="number" data-field="weight" min="30" max="250" step="0.1" value="${data.weight}"></label>
+        <label>Телосложение<select class="text_pole" data-field="build">${opt(Object.entries(BUILD_TYPES).map(([k, v]) => [k, v.labelRu]), data.build)}</select></label>
+        <label>Образ жизни (для нормы)<select class="text_pole" data-field="activity">${opt(Object.entries(ACTIVITY_LEVELS).map(([k, v]) => [k, v.labelRu]), data.activity)}</select></label>
+    </div>
+    <div class="nn-form-line">
+        <label class="checkbox_label"><input type="checkbox" data-field="manualToggle" ${manual ? 'checked' : ''}>Своя норма калорий</label>
+        <input class="text_pole nn-num" type="number" data-field="manualGoal" min="800" max="6000" value="${manual ? data.manualGoal : auto}" ${manual ? '' : 'disabled'}>
+        <span class="nn-mute">по формуле: ${auto} ккал</span>
+    </div>
+    ${data.gender === 'male' ? '' : `<div class="nn-form-line">
+        <label class="checkbox_label"><input type="checkbox" data-field="pregnant" ${data.pregnant ? 'checked' : ''}>Беременность</label>
+        <input class="text_pole nn-num" type="number" data-field="pregnancyWeek" min="0" max="42" placeholder="неделя" value="${data.pregnancyWeek || ''}" ${data.pregnant ? '' : 'disabled'}>
+    </div>`}
+    <h4 class="nn-h">Расстройства пищевого поведения</h4>
+    <div class="nn-form">
+        ${Object.entries(ED_DB).map(([id, def]) => `<label>${def.nameRu}<select class="text_pole" data-field="ed_${id}">
+            ${opt([['', 'Нет'], ['mild', 'Лёгкая'], ['moderate', 'Средняя'], ['severe', 'Тяжёлая']], data.ed?.[id] || '')}
+        </select></label>`).join('')}
+    </div>
+    <p class="nn-hint">Черта персонажа: влияет на то, как ИИ отыгрывает его отношения с едой и телом, и добавляет эффекты после еды. Само по себе от голода не появляется.</p>
+    <div class="nn-form-line">
+        <button class="nn-btn" data-act="reanalyze"><i class="fa-solid fa-arrows-rotate"></i>Заново определить по карточке</button>
+    </div>
+    <div class="nn-rates">
+        <div><span class="nn-mute">Базовый обмен</span><b>${r0(bmrOf(data))} ккал/сут</b></div>
+        <div><i class="fa-solid fa-bed"></i><span class="nn-mute">Сон</span><b>${r0(burnPerHour(data, 'low', true))} ккал/ч</b></div>
+        <div><i class="fa-solid ${ACT_ICON.low}"></i><span class="nn-mute">Низкая</span><b>${r0(burnPerHour(data, 'low'))} ккал/ч</b></div>
+        <div><i class="fa-solid ${ACT_ICON.medium}"></i><span class="nn-mute">Средняя</span><b>${r0(burnPerHour(data, 'medium'))} ккал/ч</b></div>
+        <div><i class="fa-solid ${ACT_ICON.high}"></i><span class="nn-mute">Высокая</span><b>${r0(burnPerHour(data, 'high'))} ккал/ч</b></div>
+    </div>
+    <p class="nn-hint">Реальный расход считается по активности в каждой сцене: базовый обмен (пол, вес, рост, возраст, телосложение) × уровень активности. Образ жизни влияет только на рекомендуемую норму — сколько персонаж в среднем должен есть.</p>`;
+}
+
+function onParamChange(el) {
+    const data = ui.who === 'bot' ? getBotState() : state.user;
+    if (!data) return;
+    const f = el.dataset.field;
+    if (f.startsWith('ed_')) {
+        data.ed = { ...(data.ed || {}), [f.slice(3)]: el.value || null };
+    } else if (f === 'manualToggle') {
+        data.manualGoal = el.checked ? (calculateCalorieGoal(data) || 2000) : null;
+        if (!el.checked) recalcGoal(data);
+    } else if (f === 'manualGoal') {
+        const v = parseInt(el.value);
+        if (isNaN(v) || v < 800 || v > 6000) return;
+        data.manualGoal = v;
+    } else if (f === 'pregnant') {
+        data.pregnant = el.checked;
+        if (!el.checked) data.pregnancyWeek = 0;
+        if (data.manualGoal == null) recalcGoal(data);
+    } else if (f === 'pregnancyWeek') {
+        const v = parseInt(el.value);
+        if (isNaN(v) || v < 0 || v > 42) return;
+        data.pregnancyWeek = v;
+        if (v > 0) data.pregnant = true;
+        if (data.manualGoal == null) recalcGoal(data);
+    } else {
+        let v = el.value;
+        if (['age', 'height'].includes(f)) { v = parseInt(v); if (isNaN(v)) return; }
+        if (f === 'weight') {
+            v = parseFloat(v);
+            if (isNaN(v)) return;
+            shiftWeight(data, v - data.weight);
+        }
+        data[f] = v;
+        if (f === 'gender' && v === 'male') { data.pregnant = false; data.pregnancyWeek = 0; }
+        if (data.manualGoal == null) recalcGoal(data);
+    }
+    saveState();
+    injectPrompt();
+    renderLiveBlock();
+}
+
+// Ручная правка веса — это правка профиля: переносим её и в снимки,
+// иначе свайп вернул бы старый вес
+function shiftWeight(data, delta) {
+    if (!delta) return;
+    data.dayStartWeight = (data.dayStartWeight ?? data.weight) + delta;
+    for (const snap of state.snapshots) {
+        const c = data === state.user ? snap.user : snap.characters.find(x => x.charId === data.charId);
+        if (c) { c.weight = +(c.weight + delta).toFixed(3); if (c.dayStartWeight != null) c.dayStartWeight += delta; }
+    }
+}
+
+function reanalyze() {
+    if (ui.who === 'user') {
+        const before = state.user.weight;
+        state.user.analyzed = false;
+        analyzeUser();
+        const after = state.user.weight;
+        state.user.weight = before;
+        shiftWeight(state.user, after - before);
+        state.user.weight = after;
+    } else {
+        const bot = getCurrentBot(), data = getBotState();
+        if (bot && data) {
+            const p = buildCharacterParams(botCardText(bot));
+            shiftWeight(data, p.weight - data.weight);
+            Object.assign(data, { gender: p.gender, age: p.age, height: p.height, weight: p.weight, build: p.build, activity: p.activity, ed: { ...p.ed } });
+            if (data.manualGoal == null) data.calorieGoal = p.calorieGoal;
+        }
+    }
+    saveState();
+    injectPrompt();
+    notify('Параметры определены заново по карточке', 'success', 2500, true);
+    renderLiveBlock();
+}
+
+// ─── События внутри блока ─────────────────────────────────────
+function bindBlock(block) {
+    const idOf = () => Number(block.dataset.mesid);
+
+    block.addEventListener('click', (e) => {
+        const t = e.target.closest('[data-act]');
+        if (!t || !block.contains(t)) return;
+        e.stopPropagation();
+        const id = idOf();
+        switch (t.dataset.act) {
+            case 'toggle': ui.open.set(id, !block.classList.contains('nn-open')); break;
+            case 'tab': ui.tab.set(id, t.dataset.tab); break;
+            case 'who': ui.who = t.dataset.who; ui.prodSel = null; break;
+            case 'cat': ui.prodCat = t.dataset.cat; ui.prodSearch = ''; ui.prodSel = null; break;
+            case 'prod': {
+                const idx = Number(t.dataset.idx);
+                if (ui.prodSel === idx) ui.prodSel = null;
+                else { ui.prodSel = idx; ui.prodGrams = PRODUCT_DB[idx].grams; }
+                break;
+            }
+            case 'step': ui.prodGrams = Math.max(10, Math.min(2000, (ui.prodGrams || 100) + Number(t.dataset.step))); break;
+            case 'grams': ui.prodGrams = Number(t.dataset.g); break;
+            case 'eat': consumeProduct(PRODUCT_DB[Number(t.dataset.idx)], ui.who, ui.prodGrams); return;
+            case 'reanalyze': reanalyze(); return;
+            default: return;
+        }
+        renderBlock(id);
+    });
+
+    // Аватарка не загрузилась: пробуем оригинал, потом значок
+    block.addEventListener('error', (e) => {
+        const img = e.target;
+        if (!(img instanceof HTMLImageElement) || !img.classList.contains('nn-av')) return;
+        const fb = img.dataset.fallback;
+        if (fb) { img.dataset.fallback = ''; img.src = fb; return; }
+        const span = document.createElement('span');
+        span.className = img.className + ' nn-av-empty';
+        span.innerHTML = '<i class="fa-solid fa-user"></i>';
+        img.replaceWith(span);
+    }, true);
+
+    block.addEventListener('keydown', (e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.nn-head')) {
+            e.preventDefault();
+            e.target.click();
+        }
+    });
+
+    block.addEventListener('change', (e) => {
+        const el = e.target;
+        e.stopPropagation();
+        if (el.matches('.nn-grams-input')) {
+            const v = parseInt(el.value);
+            if (!isNaN(v) && v >= 10 && v <= 2000) { ui.prodGrams = v; renderBlock(idOf()); }
+        } else if (el.dataset.field) {
+            onParamChange(el);
+        }
+    });
+
+    block.addEventListener('input', (e) => {
+        if (!e.target.matches('.nn-search')) return;
+        e.stopPropagation();
+        ui.prodSearch = e.target.value;
+        ui.prodSel = null;
+        const list = block.querySelector('.nn-prod-list');
+        if (list) list.innerHTML = prodListHtml();
+        block.querySelectorAll('.nn-cat').forEach(c => c.classList.toggle('nn-on', !ui.prodSearch && c.dataset.cat === ui.prodCat));
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ПАНЕЛЬ В МЕНЮ РАСШИРЕНИЙ
+// ═══════════════════════════════════════════════════════════════
+function setEnabled(val) {
+    localStorage.setItem(LS.enabled, val ? 'true' : 'false');
+    injectPrompt();
+    renderAllBlocks();
+}
+
+const DEBUG_OPTIONS = [
+    ['disease:hypoglycemia:mild', 'Болезнь: гипогликемия, лёгкая'],
+    ['disease:hypoglycemia:critical', 'Болезнь: гипогликемия, критическая'],
+    ['disease:starvation:moderate', 'Болезнь: истощение, среднее'],
+    ['disease:dehydration_disease:moderate', 'Болезнь: обезвоживание, среднее'],
+    ['disease:malnutrition:mild', 'Болезнь: недоедание, лёгкое'],
+    ['disease:refeeding:severe', 'Болезнь: рефидинг-синдром'],
+    ['disease:electrolyte:moderate', 'Болезнь: электролитный дисбаланс'],
+    ['disease:alcohol_poisoning:severe', 'Болезнь: алкогольное отравление'],
+    ['disease:food_obsession:moderate', 'Психика: пищевая одержимость'],
+    ['disease:hunger_apathy:mild', 'Психика: голодная апатия'],
+    ['disease:food_insecurity:mild', 'Психика: пищевая тревожность'],
+    ['stat:hunger', 'Состояние: голодный'],
+    ['stat:thirst', 'Состояние: жажда'],
+    ['stat:tired', 'Состояние: устал'],
+    ['stat:drunk', 'Состояние: пьян (1.2‰)'],
+    ['stat:coffee', 'Состояние: много кофеина'],
+    ['stat:awake', 'Состояние: 22 часа без сна'],
+    ['stat:perfect', 'Состояние: сыт, напоен, бодр'],
+    ['effect:hangover', 'Эффект: похмелье'],
+    ['effect:rested', 'Эффект: выспался'],
+    ['effect:shame', 'Эффект: стыд и вина'],
+];
+const DEBUG_STATS = {
+    hunger: { satiety: 12, hoursSinceLastMeal: 8 },
+    thirst: { water: 20 },
+    tired: { energy: 25 },
+    drunk: { bac: 1.2, bacPeak: 1.2 },
+    coffee: { caffeine: 450 },
+    awake: { hoursAwake: 22 },
+    perfect: { satiety: 90, water: 90, energy: 92, health: 100 },
+};
+
+function debugApply(code, who) {
+    const data = who === 'bot' ? getBotState() : state.user;
+    if (!data) { notify('Персонаж не загружен', 'warning', 2500, true); return; }
+    const g = effectiveGoal(data);
+    const [kind, id, sev] = code.split(':');
+    if (kind === 'disease') {
+        const def = DISEASE_DB[id];
+        data.diseases = data.diseases.filter(d => d.id !== id);
+        const st = def.stages[sev];
+        data.diseases.push({
+            id, name: def.nameRu, nameEn: def.nameEn, severity: sev,
+            effects: st.effects, effectsEn: st.effectsEn, modifiers: st.modifiers, symptoms: st.symptoms,
+            elapsedHours: 0, recoveryHours: 0, recovering: false, since: '0ч',
+        });
+        if (id === 'hypoglycemia' || id === 'starvation') Object.assign(data, { reserve: 0, satiety: 5, hoursSinceLastMeal: (st.threshold?.hoursSinceLastMeal || 12) + 1 });
+        if (id === 'dehydration_disease') data.water = st.threshold?.water ?? 10;
+        if (id === 'malnutrition') data.daysWithDeficit = 3;
+        if (id === 'electrolyte') data.electrolyte = 55;
+        if (id === 'alcohol_poisoning') data.bac = 3.2;
+        if (id === 'food_obsession') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 5);
+        if (id === 'hunger_apathy') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 4);
+        if (id === 'food_insecurity') { data.starvationTrauma = true; data.hoursSinceLastMeal = 10; }
+        if (id === 'refeeding') data.diseases.find(d => d.id === 'refeeding').recovering = true;
+    } else if (kind === 'effect') {
+        grantEffect(data, id, id === 'rested' ? 10 : id === 'hangover' ? 8 : 4);
+    } else if (id === 'overfed') {
+        data.recentIntake = g * 0.8; data.satiety = 100;
+    } else {
+        Object.assign(data, DEBUG_STATS[id] || {});
+        if (id === 'perfect') data.reserve = g * 0.8;
+    }
+    evaluateConditions(data, 0);
+    updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true });
+    saveState();
+    injectPrompt();
+    renderLiveBlock();
+    notify('Тестовое состояние применено', 'info', 2000, true);
+}
+
+function injectSettingsPanel() {
+    let attempts = 0;
+    const iv = setInterval(() => {
+        attempts++;
+        const container = document.querySelector('#extensions_settings2') || document.querySelector('#extensions_settings');
+        if (!container) { if (attempts >= 40) clearInterval(iv); return; }
+        clearInterval(iv);
+        if (document.getElementById('nn-settings-drawer')) return;
+
+        container.insertAdjacentHTML('beforeend', `
+        <div class="inline-drawer" id="nn-settings-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b><i class="fa-solid fa-apple-whole"></i> Калории и питание</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+            </div>
+            <div class="inline-drawer-content nn-settings">
+                <label class="checkbox_label"><input type="checkbox" id="nn-set-enabled" ${isEnabled() ? 'checked' : ''}>Включить расширение</label>
+                <label class="checkbox_label"><input type="checkbox" id="nn-set-toasts" ${toastsOn() ? 'checked' : ''}>Всплывающие уведомления</label>
+                <label class="checkbox_label"><input type="checkbox" id="nn-set-expand" ${expandLast() ? 'checked' : ''}>Раскрывать инфоблок последнего ответа</label>
+                <label class="nn-settings-row">Инфоблок показывать
+                    <select id="nn-set-scope" class="text_pole">
+                        <option value="all" ${scopeAll() ? 'selected' : ''}>под каждым ответом бота</option>
+                        <option value="last" ${scopeAll() ? '' : 'selected'}>только под последним</option>
+                    </select>
+                </label>
+                <p class="nn-hint">В старых ответах блок показывает состояние на тот момент. В последнем доступны вкладки «Вес», «Покормить» и «Параметры».</p>
+
+                <hr class="sysHR">
+                <b>Проверка</b>
+                <div class="nn-settings-row">
+                    <select id="nn-dbg-who" class="text_pole"><option value="user">Юзер</option><option value="bot">Бот</option></select>
+                    <select id="nn-dbg-code" class="text_pole">${DEBUG_OPTIONS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+                    <div id="nn-dbg-apply" class="menu_button">Применить</div>
+                </div>
+                <div class="nn-settings-row">
+                    <div id="nn-dbg-clear" class="menu_button">Очистить состояния</div>
+                    <div id="nn-dbg-reset" class="menu_button redWarningBG">Сбросить чат</div>
+                </div>
+            </div>
+        </div>`);
+
+        document.getElementById('nn-set-enabled')?.addEventListener('change', e => setEnabled(e.target.checked));
+        document.getElementById('nn-set-toasts')?.addEventListener('change', e => {
+            localStorage.setItem(LS.toasts, e.target.checked ? 'true' : 'false');
+            setToastsEnabled(e.target.checked);
+        });
+        document.getElementById('nn-set-expand')?.addEventListener('change', e => {
+            localStorage.setItem(LS.expand, e.target.checked ? 'true' : 'false');
+            renderLiveBlock();
+        });
+        document.getElementById('nn-set-scope')?.addEventListener('change', e => {
+            localStorage.setItem(LS.scope, e.target.value);
+            renderAllBlocks();
+        });
+        document.getElementById('nn-dbg-apply')?.addEventListener('click', () => {
+            if (!state) loadState();
+            debugApply(document.getElementById('nn-dbg-code').value, document.getElementById('nn-dbg-who').value);
+        });
+        document.getElementById('nn-dbg-clear')?.addEventListener('click', () => {
+            if (!state) return;
+            for (const { data } of activeChars()) {
+                Object.assign(data, {
+                    diseases: [], buffs: [], debuffs: [], satiety: 80, water: 85, energy: 85, health: 100,
+                    hoursSinceLastMeal: 2, reserve: effectiveGoal(data) * 0.6, recentIntake: 0, daysWithDeficit: 0,
+                    salience: {}, focus: [],
+                });
+            }
+            saveState(); injectPrompt(); renderLiveBlock();
+            notify('Состояния очищены', 'success', 2000, true);
+        });
+        document.getElementById('nn-dbg-reset')?.addEventListener('click', () => {
+            if (!confirm('Сбросить весь прогресс питания в этом чате?')) return;
+            chat_metadata[META_KEY] = defaultState();
+            loadState(); saveState(); injectPrompt(); renderAllBlocks();
+        });
+    }, 250);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// СОБЫТИЯ ТАВЕРНЫ
+// ═══════════════════════════════════════════════════════════════
+let generating = false;
 
 function onGenerationStarted(type, params, dryRun) {
-    if (!isEnabled() || dryRun) return;
-    if (!state) loadState();
-    injectPrompt();
-}
-
-function onMessageSent(messageId) {
+    if (dryRun) return;
+    generating = true;
     if (!isEnabled()) return;
     if (!state) loadState();
     injectPrompt();
 }
+function onGenerationEnded() { generating = false; }
 
-
-function onMessageReceived(messageId) {
+function onMessageReceived(id) {
     if (!isEnabled()) return;
     if (!state) loadState();
+    processAiResponse(Number(id));
+}
 
-    const msg = chat[messageId];
-    if (!msg || msg.is_user) return;
+function isGreeting(id) {
+    for (let i = 0; i < id; i++) if (chat[i]?.is_user) return false;
+    return true;
+}
 
-    processAiResponse(msg.mes, messageId);
+// Альтернативное приветствие — это не ход, а другая стартовая сцена
+function reanalyzeStart() {
+    if (state.snapshots.length) return;
+    state.clockHours = null;
+    for (const { data } of activeChars()) data.initialAnalyzed = false;
+    analyzeInitialSceneOnce();
+    saveState();
+    injectPrompt();
+    scheduleRenderAll();
+}
+
+function onMessageSwiped(id) {
+    if (!isEnabled() || !state) return;
+    setTimeout(() => {
+        if (generating) return;
+        const m = chat[id];
+        if (!m || m.is_user) return;
+        if (isGreeting(id)) { reanalyzeStart(); return; }
+        const sw = m.swipes?.[m.swipe_id];
+        // Переключились на уже готовый вариант — пересчитываем по его тексту
+        if (sw && sw.trim() && m.mes === sw) processAiResponse(Number(id));
+        else scheduleRenderAll();
+    }, 150);
+}
+
+function onMessageEdited(id) {
+    if (!isEnabled() || !state) return;
+    const m = chat[id];
+    // Пересчитываем только последний учтённый ответ — иначе поплывут все следующие
+    if (m && !m.is_user && Number(id) === lastProcessedMsg()) processAiResponse(Number(id));
+    else scheduleRenderAll();
 }
 
 function onChatChanged() {
+    ui.open.clear();
+    ui.tab.clear();
     loadState();
     injectPrompt();
-    renderMiniBar();
-    renderCard();
+    for (const ms of [150, 600, 1500]) setTimeout(renderAllBlocks, ms);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════════════════════
+// Таверна дорисовывает сообщения позже событий смены чата и не присылает
+// «сообщение отрисовано» при загрузке — поэтому следим за самим #chat.
+let chatObserver = null;
+function observeChat() {
+    const target = document.getElementById('chat');
+    if (!target) { setTimeout(observeChat, 500); return; }
+    if (chatObserver) return;
+    chatObserver = new MutationObserver((muts) => {
+        for (const m of muts) {
+            for (const n of m.addedNodes) {
+                if (n.nodeType === 1 && (n.classList?.contains('mes') || n.querySelector?.('.mes'))) {
+                    scheduleRenderAll();
+                    return;
+                }
+            }
+        }
+    });
+    chatObserver.observe(target, { childList: true });
+}
+
+function on(evt, fn) {
+    if (evt) eventSource.on(evt, fn);
+}
+
 function init() {
-    console.log('[Nutrition Framework] init v2 — Stage 2');
-    buildToggleButton();
-    buildMiniBar();
-    buildCard();
-    buildThemeSwitcher();
+    console.log('[Nutrition Framework] init v3 — инфоблок');
+    setToastsEnabled(toastsOn());
     injectSettingsPanel();
     loadState();
     injectPrompt();
-    renderMiniBar();
-    applyTheme(getTheme());
-    buildHelpModal();
 
- eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
- eventSource.on(event_types.MESSAGE_SENT, onMessageSent);
- eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
- eventSource.on(event_types.MESSAGE_DELETED, onMessageDeleted);
- eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+    on(event_types.GENERATION_STARTED, onGenerationStarted);
+    on(event_types.GENERATION_ENDED, onGenerationEnded);
+    on(event_types.GENERATION_STOPPED, onGenerationEnded);
+    on(event_types.MESSAGE_RECEIVED, onMessageReceived);
+    on(event_types.CHARACTER_MESSAGE_RENDERED, scheduleRenderAll);
+    on(event_types.USER_MESSAGE_RENDERED, scheduleRenderAll);
+    on(event_types.MESSAGE_SWIPED, onMessageSwiped);
+    on(event_types.MESSAGE_EDITED, onMessageEdited);
+    on(event_types.MESSAGE_UPDATED, scheduleRenderAll);
+    on(event_types.MESSAGE_DELETED, onMessageDeleted);
+    on(event_types.MORE_MESSAGES_LOADED, scheduleRenderAll);
+    on(event_types.CHAT_CHANGED, onChatChanged);
+
+    observeChat();
+    for (const ms of [300, 1000]) setTimeout(renderAllBlocks, ms);
 }
 
 jQuery(() => init());

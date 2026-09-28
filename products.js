@@ -3,19 +3,18 @@
 // water100 — % воды на 100 г/мл
 // grams — порция по умолчанию, drink: true — напиток
 
-const I = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
-
+// icon — класс иконки Font Awesome (fa-solid)
 export const PRODUCT_CATEGORIES = [
-    { id:'meat',    name:'Мясо и птица',    icon: I('<path d="M15.4 15.4c-2.1.6-4.3.3-5.7-1.1C7.4 12 8 7.8 10.9 4.9c2.9-2.9 7.1-3.5 9.4-1.2 1.4 1.4 1.7 3.6 1.1 5.7-1.4-.5-3.3 0-4.6 1.4-1.4 1.4-1.9 3.2-1.4 4.6z"/><path d="m11.3 15.6-2.2 2.2a2.5 2.5 0 1 1-4.5 1.7 2.5 2.5 0 1 1 1.4-4.2l2.1-2.2"/>') },
-    { id:'fish',    name:'Рыба',            icon: I('<path d="M7 12c4-6 10-6 14 0-4 6-10 6-14 0z"/><path d="M7 12 3 9v6l4-3z"/><circle cx="17" cy="11" r="0.5" fill="currentColor"/>') },
-    { id:'survival', name:'Дичь и лес',     icon: I('<path d="M12 2 3 21h18L12 2z"/><path d="M12 8l-4 9h8l-4-9z"/><path d="M12 21v-3"/>') },
-    { id:'garnish', name:'Гарниры',         icon: I('<path d="M4 12h16a8 8 0 0 1-16 0z"/><path d="M8 12c0-2 1-4 4-4s4 2 4 4"/>') },
-    { id:'soup',    name:'Супы',            icon: I('<path d="M4 13h16a8 7 0 0 1-16 0z"/><path d="M9 9V7M12 9V6M15 9V7"/>') },
-    { id:'veg',     name:'Овощи и фрукты',  icon: I('<path d="M12 20.9c1.5 0 2.8 1.1 4 1.1 3 0 6-8 6-12.2A4.9 4.9 0 0 0 17 5c-2.2 0-4 1.4-5 2-1-.6-2.8-2-5-2a4.9 4.9 0 0 0-5 4.8C2 14 5 22 8 22c1.3 0 2.5-1.1 4-1.1z"/><path d="M10 2c1 .5 2 2 2 5"/>') },
-    { id:'dairy',   name:'Молочное и яйца', icon: I('<path d="M12 22c4 0 7-3 7-8S15.5 2 12 2 5 9 5 14s3 8 7 8z"/>') },
-    { id:'bakery',  name:'Выпечка',         icon: I('<path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01M16 15.5v.01M12 12v.01M11 17v.01M7 14v.01"/>') },
-    { id:'drinks',  name:'Напитки',         icon: I('<path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/>') },
-    { id:'alco',    name:'Алкоголь',        icon: I('<path d="M8 22h8"/><path d="M12 15v7"/><path d="M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5z"/>') },
+    { id: 'meat',     name: 'Мясо и птица',    icon: 'fa-drumstick-bite' },
+    { id: 'fish',     name: 'Рыба',            icon: 'fa-fish' },
+    { id: 'survival', name: 'Дичь и лес',      icon: 'fa-tree' },
+    { id: 'garnish',  name: 'Гарниры',         icon: 'fa-bowl-rice' },
+    { id: 'soup',     name: 'Супы',            icon: 'fa-mug-hot' },
+    { id: 'veg',      name: 'Овощи и фрукты',  icon: 'fa-carrot' },
+    { id: 'dairy',    name: 'Молочное и яйца', icon: 'fa-cheese' },
+    { id: 'bakery',   name: 'Выпечка',         icon: 'fa-cookie' },
+    { id: 'drinks',   name: 'Напитки',         icon: 'fa-glass-water' },
+    { id: 'alco',     name: 'Алкоголь',        icon: 'fa-wine-glass' },
 ];
 
 export const PRODUCT_DB = [
