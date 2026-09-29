@@ -127,8 +127,7 @@
 }
 .nn-open > .nn-head .nn-chev,
 .nn-card:not(.nn-card-closed) > .nn-card-head .nn-chev,
-.nn-state.nn-on > .nn-state-toggle .nn-chev,
-.nn-catalog-bar.nn-on .nn-chev { transform: rotate(180deg); }
+.nn-state.nn-on > .nn-state-toggle .nn-chev { transform: rotate(180deg); }
 
 /* ─── Аватар в кольце: сытость, вода, энергия, здоровье ──── */
 .nn-ringav {
@@ -315,6 +314,27 @@
     font-size: 0.9em;
 }
 .nn-note > i { color: var(--nn-acc); padding-top: 2px; }
+.nn-note-text { flex: 1; }
+
+/* ─── Что ел(а) / почему не ест ───────────────────────────── */
+.nn-food-note { display: flex; gap: 6px; align-items: baseline; }
+.nn-food-note > i { flex: none; opacity: 0.8; }
+
+/* ─── Карандаш: правка срока беременности ─────────────────── */
+.nn-ib .nn-icon-btn {
+    flex: none;
+    padding: 1px 6px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--nn-mute);
+    background: none;
+    cursor: pointer;
+}
+.nn-ib .nn-icon-btn:hover { color: var(--nn-fg); border-color: var(--nn-line-strong); }
+.nn-preg-edit { flex-wrap: wrap; align-items: center; }
+.nn-preg-edit label { display: inline-flex; align-items: center; gap: 6px; }
+.nn-ib .nn-preg-edit .text_pole { width: 4.5em; margin: 0; padding: 2px 6px; }
+.nn-preg-hint { flex-basis: 100%; font-size: 0.85em; }
 .nn-note.nn-warn > i { color: var(--nn-warn); }
 
 /* ─── Состояния ───────────────────────────────────────────── */
@@ -395,75 +415,6 @@
 .nn-ib .nn-seg button { padding: 4px 11px; color: var(--nn-mute); }
 .nn-ib .nn-seg button + button { border-left: 1px solid var(--nn-line-strong); }
 .nn-ib .nn-seg button.nn-on { background: var(--nn-soft-2); color: var(--nn-fg); font-weight: 600; }
-
-/* ─── Покормить ───────────────────────────────────────────── */
-.nn-feed-top {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 8px;
-}
-.nn-search-wrap {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1;
-    min-width: 160px;
-    color: var(--nn-mute);
-}
-.nn-ib .nn-search { flex: 1; margin: 0; min-width: 0; }
-
-.nn-cats { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-.nn-ib .nn-cat {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 9px;
-    border: 1px solid var(--nn-line);
-    border-radius: 999px;
-    color: var(--nn-mute);
-}
-.nn-ib .nn-cat:hover { color: var(--nn-fg); border-color: var(--nn-line-strong); }
-.nn-ib .nn-cat.nn-on { color: var(--nn-fg); border-color: var(--nn-acc); }
-.nn-cat.nn-on i { color: var(--nn-acc); }
-
-.nn-prod-list {
-    max-height: 280px;
-    overflow-y: auto;
-    border-top: 1px solid var(--nn-line);
-}
-.nn-prod { border-bottom: 1px solid var(--nn-line); }
-.nn-ib .nn-prod-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    width: 100%;
-    padding: 6px 2px;
-}
-.nn-ib .nn-prod-row:hover { color: var(--nn-acc); }
-.nn-prod.nn-on .nn-prod-row { font-weight: 600; }
-.nn-prod-panel { padding: 2px 2px 9px; display: flex; flex-direction: column; gap: 7px; }
-
-.nn-grams { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.nn-ib .nn-grams > button {
-    width: 26px;
-    height: 26px;
-    border: 1px solid var(--nn-line-strong);
-    border-radius: 6px;
-    text-align: center;
-    line-height: 24px;
-}
-.nn-ib .nn-grams-input { width: 5em; margin: 0; text-align: center; }
-.nn-pchips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.nn-ib .nn-pchip {
-    padding: 2px 8px;
-    border: 1px solid var(--nn-line);
-    border-radius: 999px;
-    color: var(--nn-mute);
-    font-size: 0.9em;
-}
-.nn-ib .nn-pchip.nn-on { border-color: var(--nn-acc); color: var(--nn-fg); }
 
 .nn-ib .nn-btn {
     display: inline-flex;
@@ -657,21 +608,6 @@
 }
 .nn-state-body .nn-sub-h:first-child { margin-top: 4px; }
 
-/* ─── Каталог продуктов ──────────────────────────────────── */
-.nn-ib .nn-catalog-bar {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    width: 100%;
-    padding: 7px 9px;
-    margin-bottom: 8px;
-    border: 1px solid var(--nn-line-strong);
-    border-radius: 6px;
-}
-.nn-ib .nn-catalog-bar:hover { background: var(--nn-soft); }
-.nn-catalog-bar > span { flex: 1; font-weight: 600; }
-.nn-catalog-bar > i:first-child { color: var(--nn-acc); }
-.nn-prod-list.nn-hidden { display: none; }
 .nn-pane-empty { min-height: 24px; }
 
 /* ─── Узкие экраны ────────────────────────────────────────── */
@@ -692,9 +628,6 @@
 .nn-ib .nn-tab.nn-collapse { margin-left: auto; padding-left: 12px; padding-right: 12px; }
 .nn-ib .nn-tab.nn-collapse i { margin: 0; }
 
-/* ─── Покормить: форма ────────────────────────────────────── */
-.nn-feed-form { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
-.nn-feed-form .nn-feed-wide { grid-column: 1 / -1; }
 .nn-ib .nn-seg button i { margin-right: 4px; }
 
 /* ─── Прогресс лечения ────────────────────────────────────── */

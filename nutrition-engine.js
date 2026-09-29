@@ -167,13 +167,13 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     // Запаса не хватило — остаток сжигается из жира
     const fromFat = Math.max(0, calBurn - reserve);
     charData.reserve = Math.max(0, reserve - calBurn);
-    if (fromFat > 0) changeWeight(charData, -fromFat / KCAL_PER_KG);
+    if (fromFat > 0) bankFat(charData, -fromFat / KCAL_PER_KG);
     // Пока без еды меньше 14 ч, организм добирает нехватку из жира и держит
     // небольшой запас — гипогликемия бывает только при настоящем голодании
     if ((charData.hoursSinceLastMeal || 0) < 14) {
         const floor = dailyGoal * 0.15;
         if (charData.reserve < floor) {
-            changeWeight(charData, -(floor - charData.reserve) / KCAL_PER_KG);
+            bankFat(charData, -(floor - charData.reserve) / KCAL_PER_KG);
             charData.reserve = floor;
         }
     }
@@ -260,7 +260,7 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     if (charData.health <= 0) events.push('dying');
 
     if (isStarving) {
-        changeWeight(charData, -STARVING_LEAN_LOSS_PER_HOUR * hours);
+        bankFat(charData, -STARVING_LEAN_LOSS_PER_HOUR * hours);
         events.push('weight_loss');
     }
 
@@ -300,11 +300,21 @@ export function changeWeight(charData, kg) {
     charData.weight = Math.max(30, Math.round(((charData.weight || 65) + kg) * 1000) / 1000);
 }
 
+/**
+ * Жир от баланса калорий копится за игровой день и списывается в полночь
+ * (settleDayFat в index.js): так недоигранный день — утро и сразу скип —
+ * не превращается в потерю веса, если персонаж не ложился голодным.
+ */
+export function bankFat(charData, kg) {
+    if (!kg) return;
+    charData.fatLedger = (charData.fatLedger || 0) + kg;
+}
+
 function storeEnergy(charData, kcal, goal) {
     const cap = reserveCap(goal);
     const next = (charData.reserve || 0) + kcal;
     if (next > cap) {
-        changeWeight(charData, (next - cap) / KCAL_PER_KG);
+        bankFat(charData, (next - cap) / KCAL_PER_KG);
         charData.reserve = cap;
     } else {
         charData.reserve = next;
@@ -315,14 +325,15 @@ function storeEnergy(charData, kcal, goal) {
  * Применяет приём пищи (все блюда хода одной суммой).
  * @returns {{ overfed: boolean }}
  */
-export function applyMeal(charData, calories, waterGain = 0, goal = null) {
+export function applyMeal(charData, calories, waterGain = 0, goal = null, opts = {}) {
     const g = goal ?? goalOf(charData);
     const cal = Math.max(0, calories || 0);
     if (cal <= 0 && waterGain <= 0) return { overfed: false };
 
     charData.calories = (charData.calories || 0) + cal;
     storeEnergy(charData, cal, g);
-    charData.recentIntake = (charData.recentIntake || 0) + cal;
+    // Жадно и быстро — сигнал сытости запаздывает, переедание наступает раньше
+    charData.recentIntake = (charData.recentIntake || 0) + cal * (opts.greedy ? 1.3 : 1);
 
     // Сытость зависит от нормы: для нормы 2000 обед в 600 ккал ≈ +39%
     // При анорексии чувство переполненности наступает раньше
@@ -333,13 +344,12 @@ export function applyMeal(charData, calories, waterGain = 0, goal = null) {
     const overflow = charData.satiety + satGain - 100;
     charData.satiety = Math.min(100, Math.round(charData.satiety + satGain));
 
-    // Любая настоящая еда — это «последний приём»; крошка (меньше 50 ккал) лишь немного сдвигает
+    // Любая настоящая еда сбрасывает часы голода; крошка (меньше 50 ккал) лишь немного сдвигает
     if (cal >= 50) {
         charData.hoursSinceLastMeal = 0;
     } else if (cal > 0) {
         charData.hoursSinceLastMeal = (charData.hoursSinceLastMeal || 0) * (1 - cal / 50);
     }
-    if (cal > 0) charData.lastMealTime = Date.now();
 
     charData.energy = Math.min(100, charData.energy + Math.min(12, cal / 60));
     if (waterGain > 0) charData.water = Math.min(100, charData.water + waterGain);

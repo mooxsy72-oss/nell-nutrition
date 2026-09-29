@@ -70,16 +70,79 @@ export function foodFlags(name) {
 
 const DEFAULT_MEAL_KCAL = 400;   // если ИИ всё-таки не поставил число
 
+// ─── Манера еды/питья в скобках: «пирог (жадно):450», «пиво (залпом):500» ───
+// От неё зависит порция, если ИИ не дал чисел, и то, как быстро наступает переедание.
+const MANNERS = [
+    ['bites', /(пар[уа]\s*(кус|лож|глот)|кусоч|немного|чуть|пригуб|попроб|глоток|few bites|a bite|bite or two|nibbl|a sip|sips?\b|tast)/i, 0.25, 50],
+    ['reluctant', /(нехотя|через силу|без аппетит|вяло|ковыря|неохот|reluct|unwilling|forc|pick(ed|ing) at|no appetite)/i, 0.55, 120],
+    ['greedy', /(жадн|взахл[её]б|залпом|уплета|набросил|проглот|wolf|devour|greed|gulp|ravenous|hungrily|scarf)/i, 1.4, 500],
+    ['hearty', /(аппетит|охотно|с удовольств|heart|appetite|eager|relish|with gusto)/i, 1.15, 350],
+    ['normal', /(обычн|спокойн|normal|calm|steadily)/i, 1, 250],
+];
+export const MANNER_KEYS = MANNERS.map(m => m[0]);
+
+function mannerOf(text) {
+    const t = String(text || '');
+    for (const [id, re, kcalMult, ml] of MANNERS) if (re.test(t)) return { id, kcalMult, ml };
+    return null;
+}
+
+/** Выносит «(жадно)» из названия. Скобки с числами («(400 ккал)») не трогаем — это количество. */
+function takeManner(name) {
+    let manner = null, label = null;
+    const out = String(name || '').replace(/\s*\(([^()]*)\)\s*/g, (m, inside) => {
+        if (/\d/.test(inside) || manner) return m;
+        const mm = mannerOf(inside);
+        if (!mm) return m;
+        manner = mm; label = inside.trim();
+        return ' ';
+    }).replace(/\s+/g, ' ').trim();
+    return { name: out, manner, label };
+}
+
+// Посуда → миллилитры: «2 стакана воды», «кружка пива», «a pint of ale»
+const CONTAINERS = [
+    [/рюмк|стопк|shot/i, 50], [/глот|sip/i, 30], [/бокал|фужер|wine ?glass/i, 180], [/чашк|чашечк|cup/i, 200],
+    [/стакан|glass/i, 250], [/кружк|mug|tankard/i, 350], [/банк|can\b/i, 330], [/пинт|pint/i, 500],
+    [/бутыл|bottle/i, 500], [/кувшин|jug|pitcher/i, 1000], [/фляг|flask|waterskin|бурдюк/i, 500],
+];
+function containerMl(text) {
+    const t = String(text || '');
+    for (const [re, ml] of CONTAINERS) {
+        const m = t.match(new RegExp(`(?:(\\d+(?:[.,]\\d+)?)\\s*)?(?:${re.source})`, 'i'));
+        if (m) return (m[1] ? parseFloat(m[1].replace(',', '.')) : 1) * ml;
+    }
+    return null;
+}
+
+// Напиток, записанный в «съел»: переносим в питьё, иначе вода не засчитается
+const DRINK_WORD_RE = /^(вод|чай|чая|чаю|кофе|капучино|латте|эспрессо|сок|морс|компот|квас|пив|эль(\s|$)|сидр|вин(?!егр)|медовух|брага|водк|виски|ром(\s|$)|джин|коньяк|самогон|глинтвейн|пунш|молок|кефир|ряженк|какао|лимонад|газировк|кол[аы](\s|$)|смузи|коктейл|отвар|настой|минералк|кипят|напит|water|tea|coffee|latte|espresso|juice|beer|ale\b|lager|stout|wine|mead|cider|vodka|whisk|rum\b|gin\b|brandy|milk|cocoa|lemonade|soda|cola|smoothie|cocktail|drink)/i;
+const CONTAINER_WORD_RE = /^(\d+\s*)?(стакан|чашк|чашечк|кружк|бокал|рюмк|стопк|бутыл|банк|пинт|глот|фляг|cup|glass|mug|bottle|can|pint|shot|sip|flask)/i;
+export function looksLikeDrink(name) {
+    const n = norm(name);
+    if (!n || SOUP_RE.test(n)) return false;
+    return DRINK_WORD_RE.test(n) || (CONTAINER_WORD_RE.test(n) && !/(суп|каш|salad|салат)/i.test(n));
+}
+const isPlainWater = (name) => /(^|\s)(вод[аыуе]?|кипят\p{L}*|water)(\s|$)/iu.test(norm(name));
+
+// Блюдо не названо: «ужин», «поели», «meal» — всё равно еда
+const GENERIC_MEAL_RE = /^(еда|поел\p{L}*|перекус\p{L}*|завтрак|обед|ужин|полдник|трапез\p{L}*|meal|food|snack|breakfast|lunch|dinner|supper|ate)$/iu;
+
 function parseFoodEntry(entry) {
-    const { name, amounts } = splitEntry(entry);
+    const { name: rawName, amounts } = splitEntry(entry);
+    const { name, manner, label } = takeManner(rawName);
     // Калории — от ИИ: «ккал» или первое число без единиц
     let kcal = amounts.kcal ?? amounts.bares[0] ?? null;
     // «хлеб:2» — это количество, а не калории
     if (kcal != null && kcal > 0 && kcal < 15) kcal = null;
     const estimated = kcal == null;
-    if (kcal == null) kcal = DEFAULT_MEAL_KCAL;
+    // Без числа порцию задаёт манера: «пару кусочков» — мало, «жадно» — много
+    if (kcal == null) kcal = DEFAULT_MEAL_KCAL * (manner?.kcalMult ?? 1);
     return {
-        item: name,
+        item: name || 'еда',
+        manner: manner?.id || null,
+        mannerLabel: label,
+        generic: GENERIC_MEAL_RE.test(norm(name)),
         ...foodFlags(name),
         calories: Math.max(0, Math.min(4000, Math.round(kcal))),
         water: SOUP_RE.test(name) ? 15 : 0,
@@ -95,19 +158,30 @@ function waterPer100(name) {
     return 10;
 }
 
-function parseDrinkEntry(entry) {
-    const { name, amounts } = splitEntry(entry);
-    // «брага:500:350» — объём, потом калории; «вода:300мл»
+/**
+ * «брага:500:350», «вода:300мл», «2 стакана воды», «чай (жадно)».
+ * fromFood — напиток пришёл в поле «съел»: там одиночное число — это калории (кроме воды).
+ */
+function parseDrinkEntry(entry, { fromFood = false } = {}) {
+    const { name: rawName, amounts } = splitEntry(entry);
+    const { name, manner, label } = takeManner(rawName);
     let ml = amounts.ml ?? amounts.g ?? null;
     let kcal = amounts.kcal;
     const bares = [...amounts.bares];
+    if (fromFood && bares.length === 1 && ml == null && !isPlainWater(name)) {
+        if (kcal == null) kcal = bares.shift();
+    }
     if (ml == null && bares.length) ml = bares.shift();
     if (kcal == null && bares.length) kcal = bares.shift();
-    if (ml == null) ml = 250;
+    // «вода:2» — это два стакана, а не 2 мл
+    if (ml != null && ml > 0 && ml <= 10 && amounts.ml == null) ml = ml * 250;
+    if (ml == null) ml = containerMl(entry) ?? manner?.ml ?? 250;
     const extras = drinkExtras(name, ml);
     const water = amounts.pct ?? waterPer100(name) * ml / 100;
     return {
-        item: name,
+        item: name || 'питьё',
+        manner: manner?.id || null,
+        mannerLabel: label,
         ml: Math.round(ml),
         produce: foodFlags(name).produce,
         risky: RISKY_WATER_RE.test(name),
@@ -118,17 +192,24 @@ function parseDrinkEntry(entry) {
     };
 }
 
-/** Для ручного кормления из инфоблока — те же правила, что и для тега */
-export const parseFoodItem = (entry) => parseFoodEntry(entry);
-export const parseDrinkItem = (entry) => parseDrinkEntry(entry);
+function splitList(raw) {
+    if (isEmptyValue(raw)) return [];
+    return raw.split(/[,;]+(?![^(]*\))/).map(s => s.trim()).filter(s => s && !isEmptyValue(s));
+}
 
 function parseList(raw, parser) {
-    if (isEmptyValue(raw)) return [];
-    return raw.split(/[,;]+(?![^(]*\))/)
-        .map(s => s.trim())
-        .filter(s => s && !isEmptyValue(s))
-        .map(parser)
-        .filter(x => x.item);
+    return splitList(raw).map(parser).filter(x => x.item);
+}
+
+/** Еда из тега; напитки, которые ИИ записал в «съел», уходят в питьё */
+function parseFoodList(raw) {
+    const foods = [], drinks = [];
+    for (const s of splitList(raw)) {
+        const nameOnly = takeManner(splitEntry(s).name).name;
+        if (looksLikeDrink(nameOnly)) drinks.push(parseDrinkEntry(s, { fromFood: true }));
+        else foods.push(parseFoodEntry(s));
+    }
+    return { foods: foods.filter(x => x.item), drinks: drinks.filter(x => x.item) };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -140,7 +221,7 @@ const TAG_RES = [
 ];
 const KNOWN_KEYS = ['skip', 'user_heal', 'bot_heal', 'user_clear', 'bot_clear', 'tp', 'date', 'time', 'user_preg', 'bot_preg', 'user_full', 'bot_full', 'user_weight', 'bot_weight', 'activity', 'user_activity', 'bot_activity', 'sleeping',
     'user_feel', 'bot_feel', 'user_profile', 'bot_profile', 'user_state', 'bot_state', 'sleep', 'offscreen', 'ate', 'drank',
-    'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care'];
+    'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care', 'user_why', 'bot_why'];
 
 /**
  * Содержимое тега из текста. loose=true — для ответа фонового запроса:
@@ -232,6 +313,7 @@ export function parseNnInner(inner) {
         userFull: null, botFull: null,   // сытость 0–100 по оценке ИИ
         userWeight: null, botWeight: null, // { delta } или { abs } — вес изменился в истории
         userFeel: null, botFeel: null,
+        userWhy: null, botWhy: null,     // почему не ест — коротко, для инфоблока
         userProfile: null, botProfile: null,
         userState: null, botState: null,
         ate: [], drank: [],
@@ -305,6 +387,8 @@ export function parseNnInner(inner) {
     };
     result.userWeight = weight(f.user_weight);
     result.botWeight = weight(f.bot_weight);
+    result.userWhy = clean(f.user_why, 60);
+    result.botWhy = clean(f.bot_why, 60);
     result.userFeel = clean(f.user_feel);
     result.botFeel = clean(f.bot_feel);
     result.userProfile = parseProfile(f.user_profile);
@@ -323,12 +407,13 @@ export function parseNnInner(inner) {
     else if (/^(thirst|no.?water|dry|жажд|без.?вод)/.test(off)) result.offscreen = 'thirsty';
     else if (/^(hungry|no|false|голод|starv)/.test(off)) result.offscreen = 'hungry';
 
-    if (f.ate) result.ate = parseList(f.ate, parseFoodEntry);
-    if (f.user_ate) result.userAte = parseList(f.user_ate, parseFoodEntry);
-    if (f.bot_ate) result.botAte = parseList(f.bot_ate, parseFoodEntry);
-    if (f.drank) result.drank = parseList(f.drank, parseDrinkEntry);
-    if (f.user_drank) result.userDrank = parseList(f.user_drank, parseDrinkEntry);
-    if (f.bot_drank) result.botDrank = parseList(f.bot_drank, parseDrinkEntry);
+    const drinkList = (v) => (v ? parseList(v, (e) => parseDrinkEntry(e)) : []);
+    const eat = (v) => (v ? parseFoodList(v) : { foods: [], drinks: [] });
+    const a = eat(f.ate), ua = eat(f.user_ate), ba = eat(f.bot_ate);
+    result.ate = a.foods; result.userAte = ua.foods; result.botAte = ba.foods;
+    result.drank = [...drinkList(f.drank), ...a.drinks];
+    result.userDrank = [...drinkList(f.user_drank), ...ua.drinks];
+    result.botDrank = [...drinkList(f.bot_drank), ...ba.drinks];
 
     return result;
 }

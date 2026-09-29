@@ -1107,16 +1107,26 @@ function hashStr(s) {
     return Math.abs(h);
 }
 
-function cuesFor(c, id) {
+function cuesFor(c, id, isUser = false) {
     if (id.startsWith('ed_')) return ED_DB[id.slice(3)]?.cues;
     const d = c.diseases.find(x => x.id === id);
     if (d) return DISEASE_DB[id]?.stages?.[d.severity]?.cues || DISEASE_CUES[id];
-    return EFFECT_INFO[id]?.cues;
+    // Для персонажа игрока — только тело и мир вокруг: мысли и слова {{user}} ИИ не пишет,
+    // поэтому «спрашивает, есть ли капуста» он бы просто выбросил
+    const info = EFFECT_INFO[id];
+    return (isUser && info?.userCues) || info?.cues;
+}
+
+// «{x}» в подсказке — то, к чему тяга (квашеная капуста)
+function fillCue(c, id, cue) {
+    if (!cue || !cue.includes('{x}')) return cue;
+    const e = [...(c.buffs || []), ...(c.debuffs || [])].find(x => x.id === id);
+    return cue.replace(/\{x\}/g, e?.detailEn || e?.detail || 'it');
 }
 
 /**
  * @param {Set<string>} changed — появившиеся/ухудшившиеся id
- * @param {{ foodInScene?: boolean }} opts
+ * @param {{ foodInScene?: boolean, isUser?: boolean }} opts
  */
 export function updateFocus(charData, turn, changed = new Set(), opts = {}) {
     charData.salience = charData.salience || {};
@@ -1153,8 +1163,8 @@ export function updateFocus(charData, turn, changed = new Set(), opts = {}) {
     charData.prevCue = {};
     for (const id of focus) {
         charData.salience[id] = turn;
-        const pool = cuesFor(charData, id);
-        if (!pool?.length) continue;
+        const pool = (cuesFor(charData, id, !!opts.isUser) || []).map(x => fillCue(charData, id, x));
+        if (!pool.length) continue;
         // Подсказка каждый раз новая: не та, что была в прошлый раз
         let idx = (turn + hashStr(charData.name || '') + hashStr(id)) % pool.length;
         if (pool.length > 1 && pool[idx] === charData.lastCue[id]) idx = (idx + 1) % pool.length;
@@ -1193,8 +1203,8 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
         if (charData.prevCue?.[id]) t += ` Not again: ${charData.prevCue[id]}.`;
         return t;
     };
-    // Для персонажа игрока — только непроизвольная реакция тела, без мыслей и чувств
-    const bodyNote = opts.isUser ? ' (body only)' : '';
+    // Для персонажа игрока — непроизвольная реакция тела или мир вокруг, без мыслей и слов
+    const bodyNote = opts.isUser ? ' — through their body or the world around them' : '';
 
     for (const d of charData.diseases) {
         const def = DISEASE_DB[d.id];

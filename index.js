@@ -10,10 +10,10 @@ import { eventSource, event_types } from '../../../../scripts/events.js';
 import { power_user } from '../../../../scripts/power-user.js';
 
 import {
-    tickTime, applyMeal, applyDrink, applyVomit, goalOf, reserveCap, changeWeight, KCAL_PER_KG,
-    SCENE_ACTIVITY, bmrOf, burnPerHour,
+    tickTime, applyMeal, applyDrink, applyVomit, goalOf, changeWeight, bankFat, KCAL_PER_KG,
+    burnPerHour,
 } from './nutrition-engine.js';
-import { parseNnTag, parseNnInner, findNnInner, foodFlags, parseFoodItem, parseDrinkItem, MAX_HOURS } from './parser.js';
+import { parseNnTag, parseNnInner, findNnInner, MAX_HOURS } from './parser.js';
 import {
     notify, queueNotify, flushQueue, setSilent, setToastsEnabled, clearQueue,
 } from './notifications.js';
@@ -24,7 +24,7 @@ import {
     applyHealDelta, resolveDiseaseId,
     pregnancyEvents, capHungerSeverity, setHungerCap, illnessEvents, setEra,
 } from './conditions.js';
-import { EFFECT_INFO, effectView, drinkExtras, grantEffect, resolveEffectId } from './effects.js';
+import { EFFECT_INFO, effectView, drinkExtras, grantEffect, resolveEffectId, hasEffect } from './effects.js';
 import { ACTIVITY_LEVELS, BUILD_TYPES, calculateCalorieGoal } from './analyzer.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -129,8 +129,10 @@ function defaultCharState(name = '', charId = '') {
         illRollDay: null,       // последний день, за который бросали шанс заболеть
         careLeft: 0,            // часы ухода (лекарь, травы, покой) — выздоровление быстрее
 
-        lastMealTime: null, hoursSinceLastMeal: 0, daysWithDeficit: 0,
+        hoursSinceLastMeal: 0, daysWithDeficit: 0,
         dayStartWeight: null,  // вес на начало игрового дня
+        fatLedger: 0,          // кг жира от баланса калорий за день — списывается в полночь
+        foodNote: null,        // { kind: 'ate' | 'why' | 'off', text } — что ел(а) или почему не ест
         salience: {}, focus: [], focusCue: {},
         feel: null,             // как себя чувствует — пишет ИИ в теге
 
@@ -148,7 +150,6 @@ function defaultState() {
         history: [],
         weightHistory: [],
         snapshots: [],          // { beforeMsg, ... } — состояние ДО обработки ответа
-        manualLog: [],          // ручное кормление, привязанное к ответу
         rpDate: null,           // дата/время из ролплея (тег date=)
         missedTag: 0,           // сколько ответов подряд пришло без тега (для «догоняющего» тега)
         calibrate: { pending: true, doneAt: null },   // уточнить профиль по карточкам в следующем ответе
@@ -184,7 +185,8 @@ function loadState() {
         }
 
         state.snapshots = (state.snapshots || []).filter(s => s && s.beforeMsg !== undefined);
-        for (const k of ['history', 'weightHistory', 'manualLog']) if (!Array.isArray(state[k])) state[k] = [];
+        for (const k of ['history', 'weightHistory']) if (!Array.isArray(state[k])) state[k] = [];
+        delete state.manualLog;   // вкладки «Покормить» больше нет
         fillChar(state.user);
         state.user.name = getUserName();
         for (const c of state.characters) fillChar(c);
@@ -200,11 +202,13 @@ function loadState() {
                     d.progress = d.recovering ? Math.min(95, Math.round((d.recoveryHours || 0) / need * 100)) : 0;
                 }
             }
+            delete c.lastMealTime;
             // Старые чаты: текущий вес уже включает набранное за беременность
             if (c.pregnant && c.pregMassApplied == null) {
                 c.pregGainFactor = pregGainFactor(c);
                 c.pregMassApplied = pregMass(c.pregnancyWeek, c.pregGainFactor);
             }
+            if (c.pregnant && !c.pregBase) c.pregBase = { week: c.pregnancyWeek || 1, clock: state.clockHours ?? 12 };
         }
     } catch (err) {
         console.warn('[NN] loadState failed, resetting:', err);
@@ -312,7 +316,6 @@ function onMessageDeleted() {
     if (!isEnabled() || !state) return;
     const len = chat.length;
     const affected = state.snapshots.filter(s => s.beforeMsg >= len).sort((a, b) => a.beforeMsg - b.beforeMsg);
-    state.manualLog = state.manualLog.filter(e => e.afterMsg < len);
     if (affected.length) {
         restoreSnapshot(affected[0]);
         state.snapshots = state.snapshots.filter(s => s.beforeMsg < len);
@@ -350,7 +353,7 @@ const isNight = (h) => h >= 23 || h < 7;
  * @param {{user:boolean, bot:boolean}} fedOf — едят ли за кадром по распорядку
  * @param {{user:boolean, bot:boolean}} drinkOf — пьют ли за кадром
  */
-function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: true, bot: true }, declaredSkip = false) {
+function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: true, bot: true }, declaredSkip = false, loggedMeal = { user: false, bot: false }) {
     const chars = activeChars();
     setHungerCap(!isHard());
     setEra(isHistorical() ? 'historical' : 'modern');
@@ -360,6 +363,13 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
     const routine = declaredSkip || hours >= 6;
     const opts = { healthFloor: isHard() ? null : 25 };
     let left = hours;
+    // Если ИИ сам записал еду в конце отрезка, последний обед по распорядку и есть она —
+    // его пропускаем, чтобы не посчитать дважды
+    // На скипе еда в теге — это уже сцена после него: заменяет обед, только если тот был в последние 3 часа
+    const endAt = state.clockHours + hours;
+    const lastMealAt = routine ? lastRoutineMeal(state.clockHours, endAt) : null;
+    const nearEnd = lastMealAt != null && endAt - lastMealAt <= 3;
+    const skipLast = { user: loggedMeal.user && (!declaredSkip || nearEnd), bot: loggedMeal.bot && (!declaredSkip || nearEnd) };
     ctx.slept = { user: 0, bot: 0 };
     ctx.woke = { user: false, bot: false };
     ctx.endedAsleep = sleeping;
@@ -384,7 +394,11 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                 for (const [mh, share] of MEALS) {
                     const crossed = h0 < mh ? h0 + step >= mh : h0 + step - 24 >= mh;
                     if (!crossed || asleep) continue;
+                    const at = state.clockHours - h0 + (h0 < mh ? mh : mh + 24);
+                    if (skipLast[ch.who] && lastMealAt != null && Math.abs(at - lastMealAt) < 1e-6) continue;
                     applyMeal(c, dayTarget * share, 8, g);
+                    // Обычная трапеза за кадром наедает досыта — иначе к ночи все «голодные»
+                    c.satiety = Math.max(c.satiety, 75);
                     // Обычный обед по распорядку — не обжорство
                     c.recentIntake = Math.min(c.recentIntake || 0, g * 0.4);
                     c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
@@ -392,7 +406,7 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                 // Сытый организм добирает нехватку из жира, а не проваливается в гипогликемию
                 const floor = g * (asleep ? 0.25 : 0.4);
                 if ((c.reserve || 0) < floor) {
-                    changeWeight(c, -(floor - c.reserve) / KCAL_PER_KG);
+                    bankFat(c, -(floor - c.reserve) / KCAL_PER_KG);
                     c.reserve = floor;
                 }
             }
@@ -404,6 +418,8 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
 
         const prevDay = Math.floor(state.clockHours / 24);
         state.clockHours += step;
+        // Беременность идёт вместе со временем — вес прибавляется каждый день, и на скипах тоже
+        for (const ch of chars) advancePregnancy(ch.data);
         const newDay = Math.floor(state.clockHours / 24);
         for (let d = prevDay + 1; d <= newDay; d++) {
             for (const ch of chars) rolloverDay(ch, d, ctx);
@@ -415,6 +431,18 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
         }
         ctx.endedAsleep = asleep;
     }
+}
+
+// Абсолютное время последнего обеда по распорядку на отрезке (from, to]
+function lastRoutineMeal(from, to) {
+    let last = null;
+    for (let d = Math.floor(from / 24); d <= Math.floor(to / 24); d++) {
+        for (const [mh] of MEALS) {
+            const t = d * 24 + mh;
+            if (t > from && t <= to && !isNight(mh)) last = t;
+        }
+    }
+    return last;
 }
 
 // Сверяем внутренние часы с временем из ролплея (тег time=)
@@ -457,55 +485,109 @@ function pregWeekFrom(c, v) {
     return v;
 }
 
-// Беременность: неделя из тега, дальше идёт сама со временем
+// Точная неделя с дробной частью: от точки отсчёта идёт по игровым часам
+function pregWeekExact(c, clock = state.clockHours) {
+    if (!c.pregnant || !c.pregBase) return c.pregnancyWeek || 0;
+    return Math.min(42, c.pregBase.week + Math.max(0, (clock - c.pregBase.clock) / 168));
+}
+
+/**
+ * Беременность из тега. Неделя может только расти: ИИ часто повторяет ту неделю,
+ * что видел в промпте, — раньше это сбрасывало отсчёт, и срок «застревал».
+ * Назад срок правится карандашом в инфоблоке (setPregWeekManual).
+ */
 function applyPregnancy(c, week) {
-    if (c.gender === 'male') return;
+    if (c.gender === 'male' || week == null) return;
     if (week === 0) {
         // Роды: уходит большая часть «беременного» веса
         if (c.pregnant) changeWeight(c, -(c.pregMassApplied || 0) * 0.65);
         c.pregnant = false; c.pregnancyWeek = 0; c.pregBase = null; c.pregMassApplied = 0;
-    } else if (week > 0) {
-        if (!c.pregnant) {
-            // Вес на момент, когда стало известно, уже включает набранное к этой неделе
-            c.pregGainFactor = pregGainFactor(c);
-            c.pregMassApplied = pregMass(week, c.pregGainFactor);
-        } else {
-            advancePregnancyTo(c, week);
-        }
+    } else if (!c.pregnant) {
+        // Вес на момент, когда стало известно, уже включает набранное к этой неделе
+        c.pregGainFactor = pregGainFactor(c);
+        c.pregMassApplied = pregMass(week, c.pregGainFactor);
         c.pregnant = true; c.pregnancyWeek = week; c.pregBase = { week, clock: state.clockHours };
+    } else if (week > Math.floor(pregWeekExact(c))) {
+        // История ушла вперёд сильнее наших часов — догоняем (и вес тоже)
+        c.pregBase = { week, clock: state.clockHours };
+        advancePregnancy(c);
+    } else {
+        return;   // та же или меньшая неделя — это повтор, отсчёт не трогаем
     }
     if (c.manualGoal == null) recalcGoal(c);
 }
-function advancePregnancyTo(c, week) {
-    const mass = pregMass(week, c.pregGainFactor || 1);
-    changeWeight(c, mass - (c.pregMassApplied || 0));
-    c.pregMassApplied = mass;
-}
+
 function advancePregnancy(c) {
     if (!c.pregnant || !c.pregBase) return;
-    const w = Math.min(42, c.pregBase.week + Math.floor((state.clockHours - c.pregBase.clock) / 168));
+    const exact = pregWeekExact(c);
+    const mass = pregMass(exact, c.pregGainFactor || 1);
+    changeWeight(c, mass - (c.pregMassApplied || 0));
+    c.pregMassApplied = mass;
+    const w = Math.max(1, Math.floor(exact));
     if (w !== c.pregnancyWeek) {
-        advancePregnancyTo(c, w);
         c.pregnancyWeek = w;
         if (c.manualGoal == null) recalcGoal(c);
     }
+}
+
+/**
+ * Ручная правка срока (карандаш в инфоблоке, калибровка): это уточнение, а не прошедшее
+ * время — вес не меняем, только точку отсчёта. Правку переносим и в снимки, иначе свайп её откатит.
+ */
+function setPregWeekManual(c, week) {
+    const apply = (x, clock) => {
+        if (!x) return;
+        if (!week) { x.pregnant = false; x.pregnancyWeek = 0; x.pregBase = null; x.pregMassApplied = 0; return; }
+        if (!x.pregnant) x.pregGainFactor = pregGainFactor(x);
+        x.pregnant = true;
+        x.pregnancyWeek = week;
+        x.pregBase = { week, clock };
+        x.pregMassApplied = pregMass(week, x.pregGainFactor || 1);
+        if (x.manualGoal == null) x.calorieGoal = calculateCalorieGoal(x);
+    };
+    apply(c, state.clockHours);
+    for (const snap of state.snapshots) {
+        const x = c === state.user ? snap.user : snap.characters.find(y => y.charId === c.charId);
+        apply(x, snap.clockHours ?? state.clockHours);
+    }
+}
+
+// Итог дня для веса: профицит откладывается всегда, а потеря — только если день
+// закончился голодным. Недоигранный день (утро и сразу скип) вес не отнимает.
+const HUNGER_DISEASE_IDS = ['hypoglycemia', 'starvation', 'malnutrition'];
+function endedHungry(c) {
+    return hasEffect(c, 'hunger') || c.satiety <= 15
+        || c.diseases.some(d => HUNGER_DISEASE_IDS.includes(d.id) && !d.recovering);
+}
+function settleDayFat(c) {
+    const kg = c.fatLedger || 0;
+    c.fatLedger = 0;
+    if (Math.abs(kg) < 0.02) return { applied: 0, skipped: 0 };   // шум
+    if (kg > 0 || endedHungry(c)) { changeWeight(c, kg); return { applied: kg, skipped: 0 }; }
+    return { applied: 0, skipped: kg };
 }
 
 function rolloverDay(ch, endedDay, ctx) {
     const c = ch.data;
     const g = effectiveGoal(c);
     const intake = r0(c.calories);
+    const hungry = endedHungry(c);
 
-    if (intake < g * 0.6) c.daysWithDeficit = (c.daysWithDeficit || 0) + 1;
-    else if (intake >= g * 0.85) c.daysWithDeficit = Math.max(0, (c.daysWithDeficit || 0) - 1);
+    // Дефицитный день — только если лёг(ла) голодным; иначе это просто недоигранный день
+    if (hungry) c.daysWithDeficit = (c.daysWithDeficit || 0) + 1;
+    else c.daysWithDeficit = Math.max(0, (c.daysWithDeficit || 0) - 1);
+
+    const fat = settleDayFat(c);
 
     // Итог дня: считаем по реальному балансу «съедено − сожжено»
     const balance = intake - r0(c.burned);
     let reason = 'Норма';
-    if (balance > 500) reason = 'Переедание';
+    if (fat.skipped < 0) reason = 'Неполный день';
+    else if (balance > 500) reason = 'Переедание';
     else if (balance > 150) reason = 'Профицит';
-    else if (balance < -800) reason = 'Сильный дефицит';
-    else if (balance < -150) reason = 'Дефицит';
+    else if (hungry && balance < -800) reason = 'Сильный дефицит';
+    else if (hungry && balance < -150) reason = 'Дефицит';
+    if (c.pregnant && reason === 'Норма') reason = 'Беременность';
 
     const start = c.dayStartWeight ?? c.weight;
     const change = Math.round((c.weight - start) * 100) / 100;
@@ -514,7 +596,7 @@ function rolloverDay(ch, endedDay, ctx) {
         change, reason, calories: intake, burned: r0(c.burned), calorieGoal: g, timestamp: Date.now(),
     });
     if (state.weightHistory.length > 120) state.weightHistory = state.weightHistory.slice(-120);
-    if (Math.abs(change) >= 0.05) ctx.weight.push({ name: ch.name, change });
+    if (Math.abs(change) >= 0.05) ctx.weight.push({ name: ch.name, change, weight: c.weight });
 
     c.daysNoProduce = c.producedToday ? 0 : (c.daysNoProduce || 0) + 1;
     c.producedToday = false;
@@ -555,7 +637,7 @@ function consume(ch, foods, drinks, ctx) {
     if ([...foods, ...drinks].some(f => f.produce)) c.producedToday = true;
     if (foods.length) {
         const water = Math.min(60, foods.reduce((a, f) => a + (f.water || 0), 0));
-        applyMeal(c, sumCal(foods), water, g);
+        applyMeal(c, sumCal(foods), water, g, { greedy: foods.some(f => f.manner === 'greedy') });
         addToHistory(ch.who, foods.map(f => f.item), sumCal(foods));
     }
     for (const d of drinks) {
@@ -563,6 +645,24 @@ function consume(ch, foods, drinks, ctx) {
         applyDrink(c, d.water, d.calories || 0, g, { alcoholG: extras.alcoholG || 0, caffeineMg: extras.caffeineMg || 0 });
     }
     return kcal;
+}
+
+// Строка для инфоблока: что ИИ записал про еду и питьё или почему персонаж не ест
+function makeFoodNote(c, foods, drinks, why) {
+    const g = c.gender === 'female' ? 1 : c.gender === 'male' ? 0 : 2;
+    const verb = (forms) => forms[g];
+    const item = (x) => x.item + (x.mannerLabel ? ` (${x.mannerLabel})` : '');
+    const named = foods.filter(f => !f.implied);
+    const parts = [];
+    if (named.length) parts.push(`${verb(['Съел', 'Съела', 'Съел(а)'])}: ${named.map(item).join(', ')}`);
+    else if (foods.length) parts.push(verb(['Поел', 'Поела', 'Поел(а)']));
+    if (drinks.length) {
+        const w = verb(['выпил', 'выпила', 'выпил(а)']);
+        parts.push(`${parts.length ? w : w[0].toUpperCase() + w.slice(1)}: ${drinks.map(item).join(', ')}`);
+    }
+    if (parts.length) return { kind: 'ate', text: parts.join(' · ') };
+    if (why) return { kind: 'why', text: why };
+    return null;
 }
 
 function addToHistory(who, items, calories) {
@@ -613,7 +713,6 @@ function processAiResponse(messageId) {
         msg.extra = msg.extra || {};
         msg.extra.nn_tag = { inner: tag.inner, mesHash: hashText(text) };
     }
-    const tagRecovered = false;
     const ctx = newCtx();
 
     // ── Время: tp и time из тега; без тега — условные полчаса ──
@@ -638,30 +737,28 @@ function processAiResponse(messageId) {
     const sleeping = !!tag?.sleeping;
 
     // ── Еда — только из тега ──
-    const source = tag ? (tagRecovered ? 'recovered' : 'tag') : 'none';
+    const source = tag ? 'tag' : 'none';
     let userFood = tag ? (tag.userAte.length ? tag.userAte : tag.ate) : [];
     const userDrink = tag ? (tag.userDrank.length ? tag.userDrank : tag.drank) : [];
     let botFood = tag && bot ? tag.botAte : [];
     const botDrink = tag && bot ? tag.botDrank : [];
 
     // За кадром едят по распорядку. Лёгкий режим: всегда, кроме offscreen=hungry.
-    // Хард: только если ИИ отметил offscreen=fed. Кто ел в теге — тому распорядок не добавляем.
+    // Хард: только если ИИ отметил offscreen=fed.
     const off = tag?.offscreen;
     const offFed = isHard() ? off === 'fed' : off !== 'hungry' && off !== 'thirsty';
-    // На явном скипе распорядок идёт всегда (еда в теге — это уже новая сцена после скипа);
-    // на обычном длинном отрезке — только если ИИ сам не перечислил, что ели
-    const fedOf = {
-        user: offFed && (declaredSkip || !userFood.length),
-        bot: offFed && (declaredSkip || !botFood.length),
-    };
+    // Распорядок идёт на любом длинном отрезке — даже если ИИ записал еду: раньше из-за этого
+    // «утро → следующее утро с завтраком» теряло обед и ужин и считалось дефицитом.
+    // Записанная еда заменяет только последний приём по распорядку (см. advanceTime).
+    const fedOf = { user: offFed, bot: offFed };
+    const loggedMeal = { user: userFood.length > 0, bot: botFood.length > 0 };
     // Вода за кадром есть всегда, кроме offscreen=thirsty
     const drinkOf = { user: off !== 'thirsty', bot: off !== 'thirsty' };
 
     const weightBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.weight]));
     const burnedBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.burned || 0]));
     const dayBefore = Math.floor((state.clockHours ?? 12) / 24);
-    advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf, declaredSkip);
-    for (const ch of activeChars()) advancePregnancy(ch.data);
+    advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf, declaredSkip, loggedMeal);
 
     const chars = activeChars();
     const byWho = Object.fromEntries(chars.map(c => [c.who, c]));
@@ -674,7 +771,7 @@ function processAiResponse(messageId) {
         const full = fullOf[ch.who];
         if (full == null || foodsFor[ch.who].length) continue;
         const c = ch.data;
-        if (full > c.satiety + 10) {
+        if (full > c.satiety + 5) {
             const kcal = Math.round(Math.min(effectiveGoal(c) * 0.6, (full - c.satiety) / 130 * effectiveGoal(c)));
             foodsFor[ch.who] = [{ item: 'еда', calories: kcal, water: 0, implied: true }];
         }
@@ -684,6 +781,7 @@ function processAiResponse(messageId) {
 
     const mealKcal = { user: consume(byWho.user, userFood, userDrink, ctx), bot: 0 };
     if (byWho.bot) mealKcal.bot = consume(byWho.bot, botFood, botDrink, ctx);
+
     // ИИ видит сцену лучше формулы: «до отвала» — это до отвала
     for (const ch of chars) {
         const full = fullOf[ch.who];
@@ -727,6 +825,16 @@ function processAiResponse(messageId) {
         if (tag.userState) applyStateCalib(state.user, tag.userState);
         if (bot && tag.botState) applyStateCalib(bot, tag.botState);
     }
+    // Что ели или почему не едят — для инфоблока. Скип без записей: ели как обычно, за кадром.
+    const whyOf = { user: tag?.userWhy || null, bot: bot ? tag?.botWhy || null : null };
+    const drinksFor = { user: userDrink, bot: botDrink };
+    for (const ch of chars) {
+        let note = makeFoodNote(ch.data, foodsFor[ch.who], drinksFor[ch.who], whyOf[ch.who]);
+        if (!note && fedOf[ch.who] && (declaredSkip || hours >= 6)) {
+            note = { kind: 'off', text: ch.data.gender === 'female' ? 'Ела как обычно, за кадром' : ch.data.gender === 'male' ? 'Ел как обычно, за кадром' : 'Ели как обычно, за кадром' };
+        }
+        if (note) ch.data.foodNote = note;
+    }
     if (state.calibrate?.pending || state.calibrate?.doneAt === N) {
         state.calibrate = { pending: false, doneAt: N };
     }
@@ -734,6 +842,8 @@ function processAiResponse(messageId) {
     if (bot && tag?.botCare) bot.careLeft = 12;
     if (tag?.userPreg != null) applyPregnancy(state.user, pregWeekFrom(state.user, tag.userPreg));
     if (bot && tag?.botPreg != null) applyPregnancy(bot, pregWeekFrom(bot, tag.botPreg));
+    // Тег мог прийти с временем, но без недели — срок всё равно догоняет часы
+    for (const ch of chars) advancePregnancy(ch.data);
 
     // Лечение по ролплею (user_heal=cold:+10) и эффекты, которые прошли в истории (user_clear=)
     const healOf = { user: tag?.userHeal || [], bot: bot ? tag?.botHeal || [] : [] };
@@ -785,15 +895,12 @@ function processAiResponse(messageId) {
         if (r.vomited) applyVomit(ch.data);
     }
 
-    // Ручное кормление, сделанное после этого ответа, применяем заново
-    for (const e of state.manualLog.filter(x => x.afterMsg === N)) applyManual(e);
-
     for (const ch of chars) mergeCond(ctx, ch.who, evaluateConditions(ch.data, 0));
 
     // ── Уведомления ──
     const uName = getUserName(), bName = getBotName();
     const foodLine = (name, list) => `${name}: ${list.map(f => f.item).join(', ')} (+${sumCal(list)} ккал)`;
-    if (userFood.length) queueNotify(foodLine(uName, userFood) + (source === 'text' ? ' — оценка по тексту' : ''), 'food', 3500);
+    if (userFood.length) queueNotify(foodLine(uName, userFood), 'food', 3500);
     if (botFood.length) queueNotify(foodLine(bName, botFood), 'food', 3500);
     if (userDrink.length) queueNotify(`${uName}: ${userDrink.map(d => d.item).join(', ')}`, 'water', 3000);
     if (botDrink.length) queueNotify(`${bName}: ${botDrink.map(d => d.item).join(', ')}`, 'water', 3000);
@@ -826,10 +933,11 @@ function processAiResponse(messageId) {
         }
 
         // Что «всплывёт» в следующем ответе
-        updateFocus(ch.data, state.turn, new Set([...t.added, ...t.progressed]), { foodInScene });
+        updateFocus(ch.data, state.turn, new Set([...t.added, ...t.progressed]), { foodInScene, isUser: ch.who === 'user' });
     }
+    // В тосте — и итоговый вес, чтобы было видно, с чем сверять инфоблок
     for (const w of ctx.weight) {
-        queueNotify(`${w.name}: вес ${w.change > 0 ? '+' : ''}${w.change.toFixed(2)} кг`, 'weight', 4000);
+        queueNotify(`${w.name}: вес ${kgDelta(w.change)} кг за день → ${kg2(w.weight)} кг`, 'weight', 4000);
     }
 
     // ── Снимок для инфоблока этого сообщения ──
@@ -872,7 +980,10 @@ function applyProfile(c, p) {
     }
     for (const f of ['gender', 'age', 'height', 'build', 'activity']) if (p[f] != null) c[f] = p[f];
     if (p.ed) c.ed = { ...p.ed };
-    if (p.pregnancyWeek != null) applyPregnancy(c, p.pregnancyWeek);
+    // Калибровка — уточнение, а не прошедшее время: срок ставим как есть, вес не трогаем
+    if (p.pregnancyWeek != null && c.gender !== 'male' && (p.pregnancyWeek > 0 || c.pregnant)) {
+        if (p.pregnancyWeek !== c.pregnancyWeek) setPregWeekManual(c, p.pregnancyWeek);
+    }
     if (c.gender === 'male') { c.pregnant = false; c.pregnancyWeek = 0; c.pregBase = null; }
     if (c.manualGoal == null) recalcGoal(c);
 }
@@ -901,7 +1012,9 @@ function viewOf(c) {
         weight: c.weight, height: c.height, age: c.age, gender: c.gender,
         weightToday: +((c.weight - (c.dayStartWeight ?? c.weight))).toFixed(3),
         pregnant: !!c.pregnant, pregnancyWeek: c.pregnancyWeek || 0,
-        hoursSinceLastMeal: c.hoursSinceLastMeal || 0,
+        pregGain: +(c.pregMassApplied || 0).toFixed(2),
+        fatLedger: +(c.fatLedger || 0).toFixed(3),
+        foodNote: c.foodNote || null,
         immunity: calculateImmunity(c),
         bac: +(c.bac || 0).toFixed(2),
         ed: edList(c),
@@ -913,51 +1026,6 @@ function viewOf(c) {
             progress: r0(d.progress || 0),
         })),
     };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// РУЧНОЕ КОРМЛЕНИЕ
-// ═══════════════════════════════════════════════════════════════
-function applyManual(e) {
-    const data = e.who === 'bot' ? getBotState() : state.user;
-    if (!data) return;
-    const g = effectiveGoal(data);
-    checkRefeeding(data, e.kcal, g);
-    if (e.produce) data.producedToday = true;
-    if (e.drink) applyDrink(data, e.water, e.kcal, g, drinkExtras(e.name, e.grams));
-    else applyMeal(data, e.kcal, e.water, g);
-    applyTurnEvents(data, { mealKcal: e.kcal });
-}
-
-function consumeManual(who) {
-    const data = who === 'bot' ? getBotState() : state.user;
-    if (!data) { notify('Персонаж не загружен', 'warning', 3000, true); return; }
-    const name = (ui.feedName || '').trim();
-    if (!name) { notify('Напишите, что именно', 'warning', 2500, true); return; }
-    const drink = ui.feedKind === 'drink';
-    const kcalRaw = parseInt(ui.feedKcal);
-    const kcal = isNaN(kcalRaw) ? '' : Math.max(0, Math.min(4000, kcalRaw));
-    const mlRaw = parseInt(ui.feedMl);
-    const ml = isNaN(mlRaw) ? 250 : Math.max(10, Math.min(3000, mlRaw));
-    const it = drink ? parseDrinkItem(`${name}:${ml}мл${kcal !== '' ? `:${kcal}ккал` : ''}`) : parseFoodItem(`${name}${kcal !== '' ? `:${kcal}` : ''}`);
-
-    const entry = {
-        afterMsg: lastProcessedMsg(), who, name, grams: drink ? ml : null,
-        kcal: it.calories, water: it.water, drink, produce: !!it.produce,
-    };
-    applyManual(entry);
-    state.manualLog.push(entry);
-    if (state.manualLog.length > 100) state.manualLog = state.manualLog.slice(-100);
-
-    evaluateConditions(data, 0);
-    addToHistory(who, [drink ? `${name} ${ml} мл` : name], it.calories);
-
-    const whoName = who === 'bot' ? getBotName() : getUserName();
-    notify(`${whoName}: ${name}${it.calories ? ` (+${it.calories} ккал)` : ''}`, drink ? 'water' : 'food', 3000, true);
-    ui.feedName = ''; ui.feedKcal = ''; ui.feedMl = '';
-    saveState();
-    injectPrompt();
-    renderLiveBlock();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1020,13 +1088,13 @@ function buildStatePrompt() {
     // Правила — только нужные в этом ходу
     const rules = [];
     if (anySurface) {
-        rules.push('Show a state only if listed under "Surface now": one brief concrete detail woven into action or dialogue — not a paragraph, not the first or last line. Never the same condition two replies in a row; never reuse an earlier image or phrase for it.');
+        rules.push('Everything under "Surface now" MUST show in this reply: one brief concrete detail each, woven into action or dialogue — not a paragraph, not the first or last line. Never reuse an earlier image or phrase for it.');
     } else {
         rules.push('Nothing to surface this reply.');
     }
     rules.push('"Background" stays unspoken unless the scene itself turns to food, drink, rest or hard effort. Weakness still limits what bodies can do.');
     if (userSurface) {
-        rules.push(`${userName} is the player's character: never write their thoughts, feelings, words or choices — but their body reacts on its own (nausea stopping them mid-step, pallor, trembling, legs giving way).`);
+        rules.push(`${userName} is the player's character: never write their thoughts, feelings, words or choices. Show their states through their body reacting on its own (pallor, nausea stopping them mid-step, a growling stomach, trembling) or through the world: ${getBotName()} noticing, offering, commenting, the craved food turning up, a smell drifting in.`);
     } else {
         rules.push(`Never write ${userName}'s thoughts, feelings, words or choices.`);
     }
@@ -1041,18 +1109,35 @@ ${rules.join(' ')}`;
 }
 
 // ─── 2. Правило тега (конец промпта) ───
+// Вопросы по порядку: модель отвечает на каждый, прежде чем писать тег
+function pregQuestion(c, name, prefix) {
+    if (!c || c.gender === 'male') return null;
+    if (c.pregnant && c.pregnancyWeek > 0) {
+        const tri = getPregnancyStage(c.pregnancyWeek).trimester;
+        return `${name} is pregnant, week ${c.pregnancyWeek} (trimester ${tri}) — it advances by itself; write ${prefix}_preg=WEEK only if the story states a later week, ${prefix}_preg=0 on birth or loss.`;
+    }
+    return `${name} is not pregnant — if the story reveals a pregnancy: ${prefix}_preg=WEEK (or 3m, T2).`;
+}
+
 function tagFieldRules(userName, botName) {
+    const u = state.user, b = getBotState();
+    const hungry = [[u, userName, 'user'], [b, botName, 'bot']].filter(([c]) => c && c.satiety <= 60);
+    const preg = [pregQuestion(u, userName, 'user'), pregQuestion(b, botName, 'bot')].filter(Boolean);
+    let n = 0;
+    const q = (text) => `${++n}. ${text}`;
     return [
-        `- FIRST: time skip? If ${userName}'s message or your reply jumps ahead ("two months later", *skip a week*, OOC) → skip=DURATION (2 months, 10 days); off-screen life is automatic. Else tp: hours since your last reply (minutes 0.2, night 8). time: clock now.`,
-        `- activity: low (rest, talk) | medium (walk, chores) | high (run, fight, labour); differing → user_/bot_activity.`,
-        `- Food & drink in ${userName}'s last message AND your reply, once each; "we ate" = both; eaten but unnamed → name the likely dish. Realistic kcal for the real portion with fat, bread, sauce — don't lowball: bread slice 90, porridge with butter 350, meat pie 400, soup with bread 450, stew or dumplings 700, big or feast plate 1000–1500. Drinks: ml, +kcal if caloric (ale 250/500 ml); gulping = 500+ ml.`,
-        `- full: fullness now 0–100 (few bites +10, meal 70–80, stuffed 95–100) — whenever someone ate. date: in-world date. feel: 3–8 words, body and mind.`,
-        `- user_/bot_heal=ID:+N / ID:-N for listed diseases, only on real treatment, recovery or a setback in this reply; +5…+15 per reply. user_/bot_clear=EFFECT_ID when the story shows an effect has passed (not diseases).`,
-        `- Only if true: sleeping=true · user_/bot_vomited=true · user_/bot_care=true · user_/bot_preg=WEEK, 5m or T2 whenever stated or implied (0 = ended) · user_/bot_weight=+2 / -3 / 62 when stated ("gained some" +2, "a lot" +5).`,
+        q(`TIME — Did the story jump ahead ("two months later", *skip a week*, OOC)? → skip=DURATION; off-screen meals and sleep are automatic. Otherwise tp = in-world hours since your last reply (a few lines 0.2, a night 8). time = clock now.`),
+        q(`ACTIVITY — low (rest, talk) | medium (walk, chores) | high (run, fight, labour); different per person → user_/bot_activity.`),
+        q(`EATING — Did anyone eat in ${userName}'s last message or your reply? Log every item once, even a bite: FOOD (MANNER):KCAL. MANNER = greedily | with appetite | normally | reluctantly | a few bites — it sets the portion. KCAL realistic for that portion with fat, bread, sauce: bread slice 90, porridge with butter 350, pie slice 350, soup with bread 450, stew 700, feast plate 1000+. Ate but no dish named ("after dinner", "we ate") → still log it, e.g. user_ate=dinner (normally):600. Then _full = fullness now 0–100 (bites +10, meal 70–80, stuffed 95+).`),
+        q(`DRINKING — Did anyone drink anything, even water, tea at the table or a sip? Each in _drank: DRINK (MANNER):ML:KCAL — sip 30, cup 250, mug 350, pint 500, gulping more; KCAL only if caloric. Drinks never go in _ate.`),
+        hungry.length ? q(`NOT EATING — ${hungry.map(x => x[1]).join(' and ')} ${hungry.length > 1 ? 'are' : 'is'} getting hungry. If they didn't eat this reply: ${hungry.map(x => `${x[2]}_why`).join(', ')} = short realistic reason, 2–5 words (just woke up, no appetite, busy working, nothing to eat).`) : null,
+        preg.length ? q(`PREGNANCY — ${preg.join(' ')}`) : null,
+        q(`ONLY IF TRUE: sleeping=true · _vomited=true · _care=true (being treated) · _heal=ID:+N for listed diseases (+5…+15 on treatment or recovery, −N on a setback) · _clear=EFFECT_ID when an effect clearly passed in the story · _weight=+2 / -3 / 62 when the story states it.`),
         isHard()
-            ? `- SURVIVAL: on a skip add offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
-            : `- On a skip they eat, drink and sleep normally unless the story says otherwise (offscreen=hungry / thirsty).`,
-    ].join('\n');
+            ? `SURVIVAL: on a skip add offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
+            : `On a skip they eat, drink and sleep normally unless the story says otherwise (offscreen=hungry / thirsty).`,
+        `date = in-world date. feel = 3–8 words, body and mind.`,
+    ].filter(Boolean).join('\n');
 }
 
 function calibrationRules(userName, botName) {
@@ -1062,7 +1147,7 @@ GENDER m or f · BUILD slim|average|athletic|muscular|heavy · LIFESTYLE sedenta
 Example shape: user_profile=f/24/165/57/slim/light/none/0 | bot_profile=m/30/185/82/muscular/active/none/0 | user_state=70/60/80 | bot_state=85/70/65`;
 }
 
-const TAG_TEMPLATE = '<!-- NN time=HH:MM | tp=HOURS | activity=LEVEL | user_ate=FOOD:KCAL | user_drank=DRINK:ML:KCAL | user_full=0-100 | bot_ate=FOOD:KCAL | bot_drank=DRINK:ML:KCAL | bot_full=0-100 | date=DATE | user_feel=FEEL | bot_feel=FEEL -->';
+const TAG_TEMPLATE = '<!-- NN time=HH:MM | tp=HOURS | activity=LEVEL | user_ate=FOOD (MANNER):KCAL | user_drank=DRINK (MANNER):ML:KCAL | user_full=0-100 | bot_ate=FOOD (MANNER):KCAL | bot_drank=DRINK (MANNER):ML:KCAL | bot_full=0-100 | date=DATE | user_feel=FEEL | bot_feel=FEEL -->';
 
 function buildTagPrompt() {
     if (!state) return '';
@@ -1070,7 +1155,8 @@ function buildTagPrompt() {
     return `[Nutrition tag — required]
 End every reply with one hidden comment on its own last line:
 ${TAG_TEMPLATE}
-CAPITALS = fill from the scene, copy nothing. Names, date, feel in the roleplay's language. Omit empty fields.
+CAPITALS = fill from the scene, copy nothing. Values in the roleplay's language. Omit fields that don't apply. _x = user_x / bot_x.
+Check each question silently, then write the tag — never answer them in the reply:
 ${tagFieldRules(userName, botName)}${catchUpLine()}${calibrateNow ? `\nONE-TIME CALIBRATION (this reply only). ${calibrationRules(userName, botName)}` : ''}
 Never skip, mention or explain the comment.`;
 }
@@ -1167,14 +1253,13 @@ const ui = {
     cardOpen: { user: true, bot: true },   // карточки персонажей в «Обзоре»
     stateOpen: { user: false, bot: false },// раздел «Самочувствие»
     who: 'user',
-    feedKind: 'food', feedName: '', feedKcal: '', feedMl: '',
+    pregEdit: { user: false, bot: false },  // открыт ли карандаш для срока беременности
 };
 
 const TABS = [
     { id: 'overview', icon: 'fa-chart-simple', label: 'Обзор' },
     { id: 'log', icon: 'fa-receipt', label: 'Журнал' },
     { id: 'weight', icon: 'fa-weight-scale', label: 'Вес', live: true },
-    { id: 'feed', icon: 'fa-utensils', label: 'Покормить', live: true },
     { id: 'params', icon: 'fa-sliders', label: 'Параметры', live: true },
 ];
 
@@ -1258,23 +1343,25 @@ function plural(n, forms) {
     if (b === 1) return forms[0];
     return forms[2];
 }
-function fmtH(h) {
-    if (h == null) return '';
-    if (h < 1) return `${Math.max(1, Math.round(h * 60))} мин`;
-    if (h >= 24) {
-        const d = Math.floor(h / 24), rest = Math.round(h % 24);
-        return rest ? `${d} д ${rest} ч` : `${d} д`;
-    }
-    return `${+h.toFixed(1)} ч`;
-}
 const kg = (w) => (Math.round((w || 0) * 10) / 10).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const kg2 = (w) => (Math.round((w || 0) * 100) / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function kgDelta(d, digits = 2) {
     if (Math.abs(d) < 0.005) return '±0';
     return (d > 0 ? '+' : '−') + Math.abs(d).toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-// ─── Аватар в кольце: четыре дуги — сытость, вода, энергия, здоровье ──
+// ─── Аватар в кольце: дуги сытости и воды; энергия и здоровье — только когда на них что-то влияет ──
 const RING_PARTS = [['satiety', 'Сытость'], ['water', 'Вода'], ['energy', 'Энергия'], ['health', 'Здоровье']];
+const ENERGY_EFFECTS = ['exhaustion', 'drowsiness', 'sleep_deprived', 'hangover', 'caffeine_jitters'];
+function showEnergy(v) {
+    return v.energy < 60 || physicalOf(v).length > 0 || effectsOf(v).some(e => ENERGY_EFFECTS.includes(e.id));
+}
+function showHealth(v) {
+    return v.health < 95 || physicalOf(v).length > 0;
+}
+function ringParts(v) {
+    return RING_PARTS.filter(([k]) => (k === 'energy' ? showEnergy(v) : k === 'health' ? showHealth(v) : true));
+}
 
 function alertOf(v) {
     if (physicalOf(v).length) return 'bad';
@@ -1287,18 +1374,20 @@ function ringAvatar(v, who, size) {
     const sw = size >= 50 ? 4 : 3.5;
     const r = size / 2 - sw / 2;
     const C = 2 * Math.PI * r;
+    const parts = ringParts(v);
+    const seg = 360 / parts.length;
     const gapDeg = 14;
-    const L = (90 - gapDeg) / 360 * C;
+    const L = (seg - gapDeg) / 360 * C;
     const c = size / 2;
     let arcs = '';
-    RING_PARTS.forEach(([k], i) => {
-        const rot = -90 + i * 90 + gapDeg / 2;
+    parts.forEach(([k], i) => {
+        const rot = -90 + i * seg + gapDeg / 2;
         const f = Math.max(0.001, L * pct(v[k]) / 100);
         const tr = `transform="rotate(${rot} ${c} ${c})"`;
         arcs += `<circle class="nn-ring-track" cx="${c}" cy="${c}" r="${r}" stroke-width="${sw}" stroke-dasharray="${L} ${C}" ${tr}/>`;
         arcs += `<circle class="nn-ring-fill nn-${lvl(v[k])}" cx="${c}" cy="${c}" r="${r}" stroke-width="${sw}" stroke-dasharray="${f} ${C}" ${tr}/>`;
     });
-    const title = RING_PARTS.map(([k, l]) => `${l} ${pct(v[k])}%`).join(' · ');
+    const title = parts.map(([k, l]) => `${l} ${pct(v[k])}%`).join(' · ');
     const alert = alertOf(v);
     const inset = sw * 2 + 1;
     return `<span class="nn-ringav" style="width:${size}px;height:${size}px" title="${title}">
@@ -1342,9 +1431,8 @@ function bodyHtml(snap, live, tab) {
     switch (tab) {
         case 'log': pane = ''; break;             // пока пусто — придумаем позже
         case 'weight': pane = weightPane(); break;
-        case 'feed': pane = feedPane(); break;
         case 'params': pane = paramsPane(); break;
-        default: pane = overviewPane(snap);
+        default: pane = overviewPane(snap, live);
     }
     return `<div class="nn-body">
         <div class="nn-tabs" role="tablist">${tabs}
@@ -1448,20 +1536,34 @@ function stateSection(v, who) {
     </div>`;
 }
 
-function personCard(v, who) {
+const NOTE_ICON = { ate: 'fa-utensils', why: 'fa-comment-dots', off: 'fa-forward' };
+
+function pregnancyNote(v, who, live) {
+    if (!v.pregnant || v.gender === 'male') return '';
+    const st = getPregnancyStage(v.pregnancyWeek);
+    const gain = v.pregGain >= 0.05 ? ` · набрано ${kgDelta(v.pregGain, 1)} кг` : '';
+    if (live && ui.pregEdit[who]) {
+        return `<div class="nn-note nn-preg-edit"><i class="fa-solid fa-person-pregnant"></i>
+            <label>Неделя <input class="text_pole nn-num" type="number" min="0" max="42" data-preg-week="${who}" value="${v.pregnancyWeek || 0}"></label>
+            <button class="nn-icon-btn" data-act="preg-save" data-who="${who}" title="Сохранить"><i class="fa-solid fa-check"></i></button>
+            <button class="nn-icon-btn" data-act="preg-edit" data-who="${who}" title="Отмена"><i class="fa-solid fa-xmark"></i></button>
+            <span class="nn-mute nn-preg-hint">0 — не беременна. Дальше срок снова пойдёт сам.</span>
+        </div>`;
+    }
+    const pencil = live ? `<button class="nn-icon-btn nn-preg-pencil" data-act="preg-edit" data-who="${who}" title="Поправить срок"><i class="fa-solid fa-pencil"></i></button>` : '';
+    return `<div class="nn-note"><i class="fa-solid fa-person-pregnant"></i><span class="nn-note-text">${esc(st.label)}, неделя ${v.pregnancyWeek || '—'}${gain}</span>${pencil}</div>`;
+}
+
+function personCard(v, who, live = false) {
     const open = ui.cardOpen[who];
     const [stText, stIcon, stLvl] = statusOf(v);
     const g = v.gender === 'male' ? 'fa-mars' : v.gender === 'female' ? 'fa-venus' : 'fa-genderless';
     const kPct = v.goal ? Math.round(v.calories / v.goal * 100) : 0;
     const kLvl = kPct > 130 ? 'over' : kPct < 30 ? 'bad' : kPct < 60 ? 'warn' : 'good';
-    const ate = v.gender === 'female' ? 'ела' : v.gender === 'male' ? 'ел' : 'ел(а)';
-    const last = v.hoursSinceLastMeal >= 1 ? `последний приём ${fmtH(v.hoursSinceLastMeal)} назад` : `${ate} недавно`;
-
-    let preg = '';
-    if (v.pregnant && v.gender !== 'male') {
-        const st = getPregnancyStage(v.pregnancyWeek);
-        preg = `<div class="nn-note"><i class="fa-solid fa-person-pregnant"></i><span>${esc(st.label)}, неделя ${v.pregnancyWeek || '—'}</span></div>`;
-    }
+    const note = v.foodNote?.text
+        ? `<div class="nn-kcal-meta nn-food-note"><i class="fa-solid ${NOTE_ICON[v.foodNote.kind] || 'fa-utensils'}"></i><span>${esc(v.foodNote.text)}</span></div>`
+        : '';
+    const preg = pregnancyNote(v, who, live);
     return `<section class="nn-card${open ? '' : ' nn-card-closed'}">
         <header class="nn-card-head" role="button" tabindex="0" data-act="card" data-who="${who}" aria-expanded="${open}">
             ${ringAvatar(v, who, 52)}
@@ -1476,13 +1578,13 @@ function personCard(v, who) {
             <div class="nn-kcal nn-${kLvl}">
                 <div class="nn-kcal-num"><b>${v.calories}</b><span>из ${v.goal} ккал</span></div>
                 <span class="nn-bar nn-bar-thick"><span style="width:${Math.min(100, kPct)}%"></span></span>
-                <div class="nn-kcal-meta">${last}</div>
+                ${note}
             </div>
             <div class="nn-rows">
                 ${statRow('fa-utensils', 'Сытость', v.satiety)}
                 ${statRow('fa-droplet', 'Вода', v.water)}
-                ${statRow('fa-bolt', 'Энергия', v.energy)}
-                ${statRow('fa-heart-pulse', 'Здоровье', v.health)}
+                ${showEnergy(v) ? statRow('fa-bolt', 'Энергия', v.energy) : ''}
+                ${showHealth(v) ? statRow('fa-heart-pulse', 'Здоровье', v.health) : ''}
             </div>
             ${preg}
             ${stateSection(v, who)}
@@ -1490,8 +1592,8 @@ function personCard(v, who) {
     </section>`;
 }
 
-function overviewPane(snap) {
-    return `<div class="nn-cards">${personCard(snap.user, 'user')}${snap.bot ? personCard(snap.bot, 'bot') : ''}</div>`;
+function overviewPane(snap, live) {
+    return `<div class="nn-cards">${personCard(snap.user, 'user', live)}${snap.bot ? personCard(snap.bot, 'bot', live) : ''}</div>`;
 }
 
 // ─── Вес ──────────────────────────────────────────────────────
@@ -1511,47 +1613,37 @@ function weightPane() {
         else if (bmi >= 30) { bmiLabel = 'ожирение'; bl = 'bad'; }
         else if (bmi >= 25) { bmiLabel = 'избыток'; bl = 'warn'; }
         const today = c.weight - (c.dayStartWeight ?? c.weight);
+        const prev = entries[entries.length - 1];
+        const ledger = c.fatLedger || 0;
+        // Баланс дня ещё не в весе: он спишется в полночь (потеря — только если день закончится голодным)
+        const pending = Math.abs(ledger) >= 0.02
+            ? `<div class="nn-kcal-meta">Баланс дня: ${kgDelta(ledger)} кг — учтётся в полночь${ledger < 0 ? ', если ляжет спать голодным' : ''}</div>` : '';
         return `<section class="nn-card">
             <header class="nn-card-head nn-card-head-static">${avatarHtml(who, 'nn-av-lg')}<div class="nn-card-id"><div class="nn-card-name">${esc(who === 'user' ? getUserName() : c.name)}</div></div>
                 <span class="nn-status"><i class="fa-solid ${trend[0]}"></i><span>${trend[1]}</span></span></header>
-            <div class="nn-kcal-num"><b>${kg(c.weight)}</b><span>кг, сегодня ${kgDelta(today)}</span></div>
+            <div class="nn-kcal-num"><b>${kg2(c.weight)}</b><span>кг, сегодня ${kgDelta(today)}${prev ? ` · прошлый день ${kgDelta(prev.change)}` : ''}</span></div>
+            ${pending}
             <div class="nn-kcal-meta">ИМТ ${bmi.toFixed(1)} — <span class="nn-${bl}-text">${bmiLabel}</span></div>
         </section>`;
     };
     const rows = [...state.weightHistory].reverse().slice(0, 30).map(e => {
         const ch = Math.abs(e.change) < 0.005 ? '<span class="nn-mute">±0</span>'
             : `<span class="${e.change > 0 ? 'nn-warn-text' : 'nn-good-text'}">${kgDelta(e.change)}</span>`;
-        return `<tr><td>${e.day}</td><td>${esc(e.name)}</td><td>${kg(e.weight)}</td><td>${ch}</td><td>${e.calories}${e.burned != null ? ` / −${e.burned}` : ''}</td></tr>`;
+        return `<tr><td>${e.day}</td><td>${esc(e.name)}</td><td>${kg2(e.weight)}</td><td>${ch}</td><td>${e.calories}${e.burned != null ? ` / −${e.burned}` : ''}</td><td class="nn-mute">${esc(e.reason || '')}</td></tr>`;
     }).join('');
     return `<div class="nn-cards">${card(state.user, 'user')}${card(getBotState(), 'bot')}</div>
         ${rows ? `<div class="nn-table-wrap"><table class="nn-table">
-            <thead><tr><th>День</th><th>Кто</th><th>Вес</th><th>За день</th><th>Ккал</th></tr></thead>
+            <thead><tr><th>День</th><th>Кто</th><th>Вес</th><th>За день</th><th>Ккал</th><th>Итог</th></tr></thead>
             <tbody>${rows}</tbody></table></div>` : ''}`;
 }
 
-// ─── Покормить ────────────────────────────────────────────────
+// ─── Переключатель «кто» (для параметров) ──────────────────────
 function whoSwitch() {
     const b = getBotState();
     return `<div class="nn-seg" role="group">
         <button class="${ui.who === 'user' ? 'nn-on' : ''}" data-act="who" data-who="user">${esc(getUserName())}</button>
         <button class="${ui.who === 'bot' ? 'nn-on' : ''}" data-act="who" data-who="bot" ${b ? '' : 'disabled'}>${esc(getBotName())}</button>
     </div>`;
-}
-
-function feedPane() {
-    const drink = ui.feedKind === 'drink';
-    return `<div class="nn-feed-top">${whoSwitch()}
-            <div class="nn-seg" role="group">
-                <button class="${drink ? '' : 'nn-on'}" data-act="feed-kind" data-kind="food"><i class="fa-solid fa-utensils"></i> Еда</button>
-                <button class="${drink ? 'nn-on' : ''}" data-act="feed-kind" data-kind="drink"><i class="fa-solid fa-glass-water"></i> Напиток</button>
-            </div>
-        </div>
-        <div class="nn-form nn-feed-form">
-            <label class="nn-feed-wide">${drink ? 'Что выпил(а)' : 'Что съел(а)'}<input class="text_pole" data-feed="feedName" value="${esc(ui.feedName)}" placeholder="${drink ? 'например, квас' : 'например, щи с хлебом'}"></label>
-            ${drink ? `<label>Объём, мл<input class="text_pole" type="number" min="10" max="3000" data-feed="feedMl" value="${esc(ui.feedMl)}" placeholder="250"></label>` : ''}
-            <label>Ккал<input class="text_pole" type="number" min="0" max="4000" data-feed="feedKcal" value="${esc(ui.feedKcal)}" placeholder="${drink ? '0' : '400'}"></label>
-        </div>
-        <button class="nn-btn nn-btn-main" data-act="feed-go"><i class="fa-solid ${drink ? 'fa-glass-water' : 'fa-utensils'}"></i>${drink ? 'Выпить' : 'Съесть'}</button>`;
 }
 
 // ─── Параметры ────────────────────────────────────────────────
@@ -1573,6 +1665,7 @@ function paramsPane() {
         <label>Вес, кг<input class="text_pole" type="number" data-field="weight" min="30" max="250" step="0.1" value="${+(+data.weight).toFixed(1)}"></label>
         <label>Телосложение<select class="text_pole" data-field="build">${opt(Object.entries(BUILD_TYPES).map(([k, v]) => [k, v.labelRu]), data.build)}</select></label>
         <label>Образ жизни<select class="text_pole" data-field="activity">${opt(Object.entries(ACTIVITY_LEVELS).map(([k, v]) => [k, v.labelRu]), data.activity)}</select></label>
+        ${data.gender !== 'male' ? `<label>Беременность, неделя<input class="text_pole" type="number" data-field="pregnancyWeek" min="0" max="42" value="${data.pregnant ? data.pregnancyWeek : 0}" title="0 — не беременна"></label>` : ''}
     </div>
     <div class="nn-form-line">
         <label class="checkbox_label"><input type="checkbox" data-field="manualToggle" ${manual ? 'checked' : ''}>Своя норма калорий</label>
@@ -1596,16 +1689,10 @@ function onParamChange(el) {
         const v = parseInt(el.value);
         if (isNaN(v) || v < 800 || v > 6000) return;
         data.manualGoal = v;
-    } else if (f === 'pregnant') {
-        data.pregnant = el.checked;
-        if (!el.checked) data.pregnancyWeek = 0;
-        if (data.manualGoal == null) recalcGoal(data);
     } else if (f === 'pregnancyWeek') {
         const v = parseInt(el.value);
         if (isNaN(v) || v < 0 || v > 42) return;
-        data.pregnancyWeek = v;
-        if (v > 0) data.pregnant = true;
-        if (data.manualGoal == null) recalcGoal(data);
+        setPregWeekManual(data, v);
     } else {
         let v = el.value;
         if (['age', 'height'].includes(f)) { v = parseInt(v); if (isNaN(v)) return; }
@@ -1615,7 +1702,7 @@ function onParamChange(el) {
             shiftWeight(data, v - data.weight);
         }
         data[f] = v;
-        if (f === 'gender' && v === 'male') { data.pregnant = false; data.pregnancyWeek = 0; }
+        if (f === 'gender' && v === 'male') setPregWeekManual(data, 0);
         if (data.manualGoal == null) recalcGoal(data);
     }
     saveState();
@@ -1632,6 +1719,18 @@ function shiftWeight(data, delta) {
         const c = data === state.user ? snap.user : snap.characters.find(x => x.charId === data.charId);
         if (c) { c.weight = +(c.weight + delta).toFixed(3); if (c.dayStartWeight != null) c.dayStartWeight += delta; }
     }
+}
+
+function savePregWeek(block, who) {
+    const data = who === 'bot' ? getBotState() : state.user;
+    const input = block.querySelector(`[data-preg-week="${who}"]`);
+    const v = parseInt(input?.value);
+    if (!data || isNaN(v) || v < 0 || v > 42) { notify('Неделя — число от 0 до 42', 'warning', 2500, true); return; }
+    setPregWeekManual(data, v);
+    ui.pregEdit[who] = false;
+    saveState();
+    injectPrompt();
+    notify(v ? `Срок: ${v} неделя` : 'Беременность снята', 'success', 2500, true);
 }
 
 function reanalyze() {
@@ -1655,8 +1754,8 @@ function bindBlock(block) {
             case 'toggle': ui.open.set(id, !block.classList.contains('nn-open')); break;
             case 'tab': ui.tab.set(id, t.dataset.tab); break;
             case 'who': ui.who = t.dataset.who; break;
-            case 'feed-kind': ui.feedKind = t.dataset.kind; break;
-            case 'feed-go': consumeManual(ui.who); return;
+            case 'preg-edit': ui.pregEdit[t.dataset.who] = !ui.pregEdit[t.dataset.who]; break;
+            case 'preg-save': savePregWeek(block, t.dataset.who); break;
             case 'card': ui.cardOpen[t.dataset.who] = !ui.cardOpen[t.dataset.who]; break;
             case 'state': ui.stateOpen[t.dataset.who] = !ui.stateOpen[t.dataset.who]; break;
             case 'reanalyze': reanalyze(); return;
@@ -1678,6 +1777,12 @@ function bindBlock(block) {
     }, true);
 
     block.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target.matches('[data-preg-week]')) {
+            e.preventDefault();
+            savePregWeek(block, e.target.dataset.pregWeek);
+            renderBlock(idOf());
+            return;
+        }
         if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.nn-head, .nn-card-head[data-act]')) {
             e.preventDefault();
             e.target.click();
@@ -1690,13 +1795,6 @@ function bindBlock(block) {
         if (el.dataset.field) {
             onParamChange(el);
         }
-    });
-
-    block.addEventListener('input', (e) => {
-        const key = e.target?.dataset?.feed;
-        if (!key) return;
-        e.stopPropagation();
-        ui[key] = e.target.value;
     });
 }
 
@@ -1737,6 +1835,8 @@ const DEBUG_OPTIONS = [
     ['effect:hangover', 'Эффект: похмелье'],
     ['effect:rested', 'Эффект: выспался'],
     ['effect:shame', 'Эффект: стыд и вина'],
+    ['effect:craving', 'Эффект: тяга к еде (беременность)'],
+    ['effect:morning_sickness', 'Эффект: утренняя тошнота'],
 ];
 const DEBUG_STATS = {
     hunger: { satiety: 12, hoursSinceLastMeal: 8 },
@@ -1775,7 +1875,8 @@ function debugApply(code, who) {
         if (id === 'scurvy') data.daysNoProduce = Math.max(data.daysNoProduce || 0, 30);
         if (id === 'gastritis') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 3);
     } else if (kind === 'effect') {
-        grantEffect(data, id, id === 'rested' ? 10 : id === 'hangover' ? 8 : 4);
+        grantEffect(data, id, id === 'rested' ? 10 : id === 'hangover' ? 8 : 4, [], id === 'craving' ? 'квашеная капуста' : null);
+        if (id === 'craving') { const e = data.debuffs.find(x => x.id === 'craving'); if (e) e.detailEn = 'sauerkraut'; }
     } else if (id === 'overfed') {
         data.recentIntake = g * 0.8; data.satiety = 100;
     } else {
@@ -1783,7 +1884,7 @@ function debugApply(code, who) {
         if (id === 'perfect') data.reserve = g * 0.8;
     }
     evaluateConditions(data, 0);
-    updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true });
+    updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true, isUser: who === 'user' });
     saveState();
     injectPrompt();
     renderLiveBlock();
@@ -1827,7 +1928,7 @@ function injectSettingsPanel() {
                         <option value="last" ${scopeAll() ? '' : 'selected'}>только под последним</option>
                     </select>
                 </label>
-                <p class="nn-hint">В старых ответах блок показывает состояние на тот момент. В последнем доступны вкладки «Вес», «Покормить» и «Параметры».</p>
+                <p class="nn-hint">В старых ответах блок показывает состояние на тот момент. В последнем доступны вкладки «Вес» и «Параметры». Еду и питьё расширение считает само по ролплею.</p>
 
                 <hr class="sysHR">
                 <b>Проверка</b>
@@ -1875,7 +1976,7 @@ function injectSettingsPanel() {
             for (const { data } of activeChars()) {
                 Object.assign(data, {
                     diseases: [], buffs: [], debuffs: [], satiety: 80, water: 85, energy: 85, health: 100,
-                    hoursSinceLastMeal: 2, reserve: effectiveGoal(data) * 0.6, recentIntake: 0, daysWithDeficit: 0,
+                    hoursSinceLastMeal: 2, reserve: effectiveGoal(data) * 0.6, recentIntake: 0, daysWithDeficit: 0, fatLedger: 0,
                     salience: {}, focus: [],
                 });
             }
