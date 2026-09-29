@@ -73,11 +73,12 @@ const DEFAULT_MEAL_KCAL = 400;   // если ИИ всё-таки не пост�
 // ─── Манера еды/питья в скобках: «пирог (жадно):450», «пиво (залпом):500» ───
 // От неё зависит порция, если ИИ не дал чисел, и то, как быстро наступает переедание.
 const MANNERS = [
-    ['bites', /(пар[уа]\s*(кус|лож|глот)|кусоч|немного|чуть|пригуб|попроб|глоток|few bites|a bite|bite or two|nibbl|a sip|sips?\b|tast)/i, 0.25, 50],
+    ['bites', /(пар[уа]\s*(кус|лож|глот|штук)|нескольк\p{L}*\s*(кус|лож|глот)|кусоч|немного|чуть|пригуб|попроб|глоток|few bites|a bite|bite or two|nibbl|a sip|sips?\b|spoonful|mouthful|tast)/iu, 0.25, 50],
     ['reluctant', /(нехотя|через силу|без аппетит|вяло|ковыря|неохот|reluct|unwilling|forc|pick(ed|ing) at|no appetite)/i, 0.55, 120],
-    ['greedy', /(жадн|взахл[её]б|залпом|уплета|набросил|проглот|wolf|devour|greed|gulp|ravenous|hungrily|scarf)/i, 1.4, 500],
-    ['hearty', /(аппетит|охотно|с удовольств|heart|appetite|eager|relish|with gusto)/i, 1.15, 350],
-    ['normal', /(обычн|спокойн|normal|calm|steadily)/i, 1, 250],
+    ['half', /(половин|пол(круж|миск|тарелк|стакан|чашк|порци|бутылк|кувшин)|half)/i, 0.5, 175],
+    ['greedy', /(жадн|взахл[её]б|залпом|уплета|набросил|проглот|целиком|до дна|до последн|подчист|вылиза|wolf|devour|greed|gulp|ravenous|hungrily|scarf|in one go|every last|drain)/i, 1.4, 500],
+    ['hearty', /(аппетит|охотно|с удовольств|целую|цел(ый|ое)|вс[юё] (миск|тарелк|кружк|порци)|полн(ую|ый|ое)|добавк|heart|appetite|eager|relish|gusto|second helping|a full|whole)/i, 1.15, 350],
+    ['normal', /(обычн|спокойн|не спеша|неторопливо|normal|calm|steadily|slowly)/i, 1, 250],
 ];
 export const MANNER_KEYS = MANNERS.map(m => m[0]);
 
@@ -91,10 +92,9 @@ function mannerOf(text) {
 function takeManner(name) {
     let manner = null, label = null;
     const out = String(name || '').replace(/\s*\(([^()]*)\)\s*/g, (m, inside) => {
-        if (/\d/.test(inside) || manner) return m;
-        const mm = mannerOf(inside);
-        if (!mm) return m;
-        manner = mm; label = inside.trim();
+        // Числа в скобках — это количество; любой другой текст — пометка «как ел(а)»
+        if (/\d/.test(inside) || label || !/\p{L}/u.test(inside)) return m;
+        manner = mannerOf(inside); label = inside.trim();
         return ' ';
     }).replace(/\s+/g, ' ').trim();
     return { name: out, manner, label };
