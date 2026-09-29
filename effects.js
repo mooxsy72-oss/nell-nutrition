@@ -169,6 +169,24 @@ export const EFFECT_INFO = {
     },
 };
 
+/** Эффект по тому, как его назвал ИИ: id, русское название или первые слова описания */
+export function resolveEffectId(name) {
+    const n = String(name || '').toLowerCase().replace(/ё/g, 'е').trim().replace(/\s+/g, '_');
+    if (!n) return null;
+    if (EFFECT_INFO[n]) return n;
+    const ALIASES = { nausea: 'morning_sickness', sickness: 'morning_sickness', тошнота: 'morning_sickness', токсикоз: 'morning_sickness',
+        thirst: 'dehydration', жажда: 'dehydration', голод: 'hunger', irritable: 'irritability', раздражительность: 'irritability',
+        sleepy: 'drowsiness', tired: 'exhaustion', drunk: 'intoxication', опьянение: 'intoxication', похмелье: 'hangover',
+        кофеин: 'caffeine', стыд: 'shame', тревога: 'post_meal_anxiety', изжога: 'heartburn', тяга: 'craving' };
+    if (ALIASES[n]) return ALIASES[n];
+    for (const [id, info] of Object.entries(EFFECT_INFO)) {
+        const names = [info.name, info.nameF, info.prompt?.split(/[ —,]/)[0]].filter(Boolean)
+            .map(x => String(x).toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, '_'));
+        if (names.some(x => x === n || x.startsWith(n))) return id;
+    }
+    return null;
+}
+
 export function effectLevel(e) {
     const info = EFFECT_INFO[e.id];
     if (!info?.levels) return null;

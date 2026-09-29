@@ -13,7 +13,7 @@ import {
     tickTime, applyMeal, applyDrink, applyVomit, goalOf, reserveCap, changeWeight, KCAL_PER_KG,
     SCENE_ACTIVITY, bmrOf, burnPerHour,
 } from './nutrition-engine.js';
-import { parseNnTag, parseNnInner, findNnInner, foodFlags, parseFoodItem, parseDrinkItem } from './parser.js';
+import { parseNnTag, parseNnInner, findNnInner, foodFlags, parseFoodItem, parseDrinkItem, MAX_HOURS } from './parser.js';
 import {
     notify, queueNotify, flushQueue, setSilent, setToastsEnabled, clearQueue,
 } from './notifications.js';
@@ -21,9 +21,10 @@ import {
     evaluateConditions, buildConditionPrompt, updateFocus,
     getPregnancyStage, calculateImmunity, DISEASE_DB,
     applyTurnEvents, checkRefeeding, edList, ED_DB, ED_SEV_LABEL, ED_GUIDANCE,
+    applyHealDelta, resolveDiseaseId,
     pregnancyEvents, capHungerSeverity, setHungerCap, illnessEvents, setEra,
 } from './conditions.js';
-import { EFFECT_INFO, effectView, drinkExtras, grantEffect } from './effects.js';
+import { EFFECT_INFO, effectView, drinkExtras, grantEffect, resolveEffectId } from './effects.js';
 import { ACTIVITY_LEVELS, BUILD_TYPES, calculateCalorieGoal } from './analyzer.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -193,6 +194,12 @@ function loadState() {
         // Вес на начало дня фиксируем уже после анализа карточек
         for (const c of [state.user, ...state.characters]) {
             if (c.dayStartWeight == null) c.dayStartWeight = c.weight;
+            for (const d of c.diseases || []) {
+                if (d.progress == null) {
+                    const need = DISEASE_DB[d.id]?.recovery?.[d.severity] || 24;
+                    d.progress = d.recovering ? Math.min(95, Math.round((d.recoveryHours || 0) / need * 100)) : 0;
+                }
+            }
             // Старые чаты: текущий вес уже включает набранное за беременность
             if (c.pregnant && c.pregMassApplied == null) {
                 c.pregGainFactor = pregGainFactor(c);
@@ -343,13 +350,14 @@ const isNight = (h) => h >= 23 || h < 7;
  * @param {{user:boolean, bot:boolean}} fedOf — едят ли за кадром по распорядку
  * @param {{user:boolean, bot:boolean}} drinkOf — пьют ли за кадром
  */
-function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: true, bot: true }) {
+function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: true, bot: true }, declaredSkip = false) {
     const chars = activeChars();
     setHungerCap(!isHard());
     setEra(isHistorical() ? 'historical' : 'modern');
     if (state.clockHours == null) state.clockHours = 12;
     // Пропуск от 6 часов проживается по распорядку, шагами по часу
-    const routine = hours >= 6;
+    // Явный скип или долгий отрезок проживается по распорядку, шагами по часу
+    const routine = declaredSkip || hours >= 6;
     const opts = { healthFloor: isHard() ? null : 25 };
     let left = hours;
     ctx.slept = { user: 0, bot: 0 };
@@ -436,6 +444,17 @@ function pregMass(week, factor = 1) {
 function pregGainFactor(c) {
     const bmi = c.weight / ((c.height / 100) ** 2);
     return bmi < 18.5 ? 1.2 : bmi < 25 ? 1 : bmi < 30 ? 0.7 : 0.5;
+}
+
+// Неделя из тега: число недель, месяцы уже пересчитаны, триместр — к его началу
+function pregWeekFrom(c, v) {
+    if (v && typeof v === 'object' && v.trimester) {
+        const start = { 1: 6, 2: 14, 3: 28 }[v.trimester];
+        const cur = c.pregnant ? c.pregnancyWeek || 0 : 0;
+        const curTri = cur >= 28 ? 3 : cur >= 14 ? 2 : cur > 0 ? 1 : 0;
+        return v.trimester > curTri ? start : (cur || start);
+    }
+    return v;
 }
 
 // Беременность: неделя из тега, дальше идёт сама со временем
@@ -599,11 +618,15 @@ function processAiResponse(messageId) {
 
     // ── Время: tp и time из тега; без тега — условные полчаса ──
     const bot = getBotState();
-    // Без тега время не угадываем: следующий ответ получит «догоняющую» приписку и покроет этот ход
-    let hours = tag ? (tag.tp ?? (tag.clock != null ? null : 0)) : 0;
+    // Явный скип (skip=2 months) важнее tp: это «прожили обычную жизнь» за этот срок.
+    // Без тега время не угадываем: следующий ответ получит «догоняющую» приписку и покроет этот ход.
+    let declaredSkip = tag?.skip != null && tag.skip > 0;
+    let hours = tag ? (declaredSkip ? tag.skip : (tag.tp ?? (tag.clock != null ? null : 0))) : 0;
     state.missedTag = tag ? 0 : (state.missedTag || 0) + 1;
     hours = tag ? alignClock(tag.clock, hours) : hours;
-    hours = Math.max(0, Math.min(720, hours || 0));
+    hours = Math.max(0, Math.min(MAX_HOURS, hours || 0));
+    // Сутки и больше за один ответ — это скип, даже если ИИ написал tp, а не skip
+    if (hours >= 24) declaredSkip = true;
     if (tag?.date) state.rpDate = tag.date;
 
     const sceneActivity = tag?.activity || 'low';
@@ -625,9 +648,11 @@ function processAiResponse(messageId) {
     // Хард: только если ИИ отметил offscreen=fed. Кто ел в теге — тому распорядок не добавляем.
     const off = tag?.offscreen;
     const offFed = isHard() ? off === 'fed' : off !== 'hungry' && off !== 'thirsty';
+    // На явном скипе распорядок идёт всегда (еда в теге — это уже новая сцена после скипа);
+    // на обычном длинном отрезке — только если ИИ сам не перечислил, что ели
     const fedOf = {
-        user: offFed && !userFood.length,
-        bot: offFed && !botFood.length,
+        user: offFed && (declaredSkip || !userFood.length),
+        bot: offFed && (declaredSkip || !botFood.length),
     };
     // Вода за кадром есть всегда, кроме offscreen=thirsty
     const drinkOf = { user: off !== 'thirsty', bot: off !== 'thirsty' };
@@ -635,7 +660,7 @@ function processAiResponse(messageId) {
     const weightBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.weight]));
     const burnedBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.burned || 0]));
     const dayBefore = Math.floor((state.clockHours ?? 12) / 24);
-    advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf);
+    advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf, declaredSkip);
     for (const ch of activeChars()) advancePregnancy(ch.data);
 
     const chars = activeChars();
@@ -707,8 +732,29 @@ function processAiResponse(messageId) {
     }
     if (tag?.userCare) state.user.careLeft = 12;
     if (bot && tag?.botCare) bot.careLeft = 12;
-    if (tag?.userPreg != null) applyPregnancy(state.user, tag.userPreg);
-    if (bot && tag?.botPreg != null) applyPregnancy(bot, tag.botPreg);
+    if (tag?.userPreg != null) applyPregnancy(state.user, pregWeekFrom(state.user, tag.userPreg));
+    if (bot && tag?.botPreg != null) applyPregnancy(bot, pregWeekFrom(bot, tag.botPreg));
+
+    // Лечение по ролплею (user_heal=cold:+10) и эффекты, которые прошли в истории (user_clear=)
+    const healOf = { user: tag?.userHeal || [], bot: bot ? tag?.botHeal || [] : [] };
+    const clearOf = { user: tag?.userClear || [], bot: bot ? tag?.botClear || [] : [] };
+    for (const ch of chars) {
+        for (const h of healOf[ch.who]) {
+            const id = resolveDiseaseId(ch.data, h.name);
+            if (!id) continue;
+            const r = applyHealDelta(ch.data, id, h.delta, hours);
+            if (r === 'cured') { ctx[ch.who].removed.add(id); ctx[ch.who].added.delete(id); }
+        }
+        for (const raw of clearOf[ch.who]) {
+            const id = resolveEffectId(raw);
+            if (!id) continue;
+            ch.data.buffs = ch.data.buffs.filter(e => e.id !== id);
+            ch.data.debuffs = ch.data.debuffs.filter(e => e.id !== id);
+            // Не даём эффекту тут же вернуться от тех же показателей
+            ch.data.suppress = { ...(ch.data.suppress || {}), [id]: 6 };
+            ctx[ch.who].added.delete(id);
+        }
+    }
 
     // События беременности — сами, по времени суток, сну и еде
     for (const ch of chars) {
@@ -733,7 +779,7 @@ function processAiResponse(messageId) {
         const added = [];
         const r = illnessEvents(ch.data, {
             day: dayNumber(), turn: state.turn, foods: foodsOf[ch.who], drinks: drinksOf[ch.who],
-            hard: isHard(), skip: hours >= 12,
+            hard: isHard(), skip: declaredSkip || hours >= 12,
         }, added);
         added.forEach(id => ctx[ch.who].added.add(id));
         if (r.vomited) applyVomit(ch.data);
@@ -864,7 +910,7 @@ function viewOf(c) {
             id: d.id, name: d.name, severity: d.severity, recovering: !!d.recovering,
             category: DISEASE_DB[d.id]?.category || 'physical',
             since: d.since, effects: d.effects || [],
-            left: d.recovering ? Math.max(0.5, r0((DISEASE_DB[d.id]?.recovery?.[d.severity] ?? 6) - (d.recoveryHours || 0))) : null,
+            progress: r0(d.progress || 0),
         })),
     };
 }
@@ -949,6 +995,8 @@ function charPromptBlock(c, name, isUser) {
     ];
     const cond = buildConditionPrompt(c, name, { isUser });
     if (cond) lines.push(cond);
+    const effIds = [...c.debuffs, ...c.buffs].map(e => e.id);
+    if (effIds.length) lines.push(`  Effect ids: ${effIds.join(', ')}`);
     const cap = getActionCapacity(c);
     if (cap) lines.push(`  Capacity: ${cap}`);
     return lines.join('\n');
@@ -995,16 +1043,15 @@ ${rules.join(' ')}`;
 // ─── 2. Правило тега (конец промпта) ───
 function tagFieldRules(userName, botName) {
     return [
-        `- time: in-world clock now. tp: in-world hours since your last reply (minutes 0.2, hour 1, night 8; a requested skip → all of it).`,
-        `- activity: low (rest, talk) | medium (walk, chores) | high (run, fight, labour); differing → user_activity / bot_activity.`,
-        `- Eating & drinking in ${userName}'s last message AND your reply, once each; "we ate" = both. Food eaten but unnamed → name the likely dish, never skip it.`,
-        `- Kcal: realistic, like a nutritionist — the real portion with its fat, bread and sauce; don't lowball. Guide: slice of bread 90, bowl of porridge with butter 350, meat pie 400, bowl of soup with bread 450, plate of stew or dumplings 700, a big eater's or feast plate 1000–1500. Drinks: ml, +kcal if caloric (ale 250 per 500 ml, mead, braga, kvass, milk); gulping = 500+ ml.`,
-        `- full: stomach fullness now, 0–100 from the scene (few bites +10, meal 70–80, stuffed 95–100) — whenever someone ate.`,
-        `- date: in-world date, part of day. feel: 3–8 words, body and mind.`,
-        `- Only if true: sleeping=true · user_/bot_vomited=true · user_/bot_care=true (sick one treated) · user_/bot_preg=WEEK (newly known; 0 = ended) · user_/bot_weight=+2 / -3 / 62 when the story states it ("gained some" +2, "a lot" +5).`,
+        `- FIRST: time skip? If ${userName}'s message or your reply jumps ahead ("two months later", *skip a week*, OOC) → skip=DURATION (2 months, 10 days); off-screen life is automatic. Else tp: hours since your last reply (minutes 0.2, night 8). time: clock now.`,
+        `- activity: low (rest, talk) | medium (walk, chores) | high (run, fight, labour); differing → user_/bot_activity.`,
+        `- Food & drink in ${userName}'s last message AND your reply, once each; "we ate" = both; eaten but unnamed → name the likely dish. Realistic kcal for the real portion with fat, bread, sauce — don't lowball: bread slice 90, porridge with butter 350, meat pie 400, soup with bread 450, stew or dumplings 700, big or feast plate 1000–1500. Drinks: ml, +kcal if caloric (ale 250/500 ml); gulping = 500+ ml.`,
+        `- full: fullness now 0–100 (few bites +10, meal 70–80, stuffed 95–100) — whenever someone ate. date: in-world date. feel: 3–8 words, body and mind.`,
+        `- user_/bot_heal=ID:+N / ID:-N for listed diseases, only on real treatment, recovery or a setback in this reply; +5…+15 per reply. user_/bot_clear=EFFECT_ID when the story shows an effect has passed (not diseases).`,
+        `- Only if true: sleeping=true · user_/bot_vomited=true · user_/bot_care=true · user_/bot_preg=WEEK, 5m or T2 whenever stated or implied (0 = ended) · user_/bot_weight=+2 / -3 / 62 when stated ("gained some" +2, "a lot" +5).`,
         isHard()
-            ? `- SURVIVAL: skip → offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
-            : `- Skips: off-screen sleep and meals are automatic; offscreen=hungry / thirsty only if they truly had none.`,
+            ? `- SURVIVAL: on a skip add offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
+            : `- On a skip they eat, drink and sleep normally unless the story says otherwise (offscreen=hungry / thirsty).`,
     ].join('\n');
 }
 
@@ -1325,13 +1372,17 @@ function statRow(icon, label, v, extra = '') {
 }
 
 function diseaseItem(d) {
-    const time = d.recovering ? `выздоровление, ещё ~${d.left} ч` : (d.since ? `уже ${d.since}` : '');
+    const time = d.since ? `уже ${d.since}` : '';
+    const prog = d.progress || 0;
+    const bar = `<div class="nn-heal" title="Прогресс лечения"><span class="nn-heal-label">${d.recovering || prog > 0 ? 'Лечение' : 'Без улучшений'}</span>
+        <span class="nn-bar"><span style="width:${prog}%"></span></span><b>${prog}%</b></div>`;
     const mind = d.category === 'mental';
     return `<div class="nn-cond nn-sev-${d.severity}${mind ? ' nn-cond-mind' : ''}">
         <i class="fa-solid ${mind ? 'fa-brain' : 'fa-virus'}"></i>
         <div class="nn-cond-main">
             <div class="nn-cond-title">${esc(d.name)} <span class="nn-sev">${SEV_LABEL[d.severity] || ''}</span></div>
             <div class="nn-cond-sub">${esc((d.effects || []).join(', '))}${time ? `. ${esc(time)}` : ''}</div>
+            ${bar}
         </div>
     </div>`;
 }
@@ -1709,7 +1760,7 @@ function debugApply(code, who) {
         data.diseases.push({
             id, name: def.nameRu, nameEn: def.nameEn, severity: sev,
             effects: st.effects, effectsEn: st.effectsEn, modifiers: st.modifiers, symptoms: st.symptoms,
-            elapsedHours: 0, recoveryHours: 0, recovering: false, since: '0ч',
+            elapsedHours: 0, progress: 0, recovering: false, since: '0ч',
         });
         if (id === 'hypoglycemia' || id === 'starvation') Object.assign(data, { reserve: 0, satiety: 5, hoursSinceLastMeal: (st.threshold?.hoursSinceLastMeal || 12) + 1 });
         if (id === 'dehydration_disease') data.water = st.threshold?.water ?? 10;

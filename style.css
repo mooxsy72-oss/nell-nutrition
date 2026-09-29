@@ -696,3 +696,10 @@
 .nn-feed-form { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
 .nn-feed-form .nn-feed-wide { grid-column: 1 / -1; }
 .nn-ib .nn-seg button i { margin-right: 4px; }
+
+/* ─── Прогресс лечения ────────────────────────────────────── */
+.nn-heal { display: flex; align-items: center; gap: 7px; margin-top: 5px; font-size: 0.85em; }
+.nn-heal-label { color: var(--nn-mute); flex: none; }
+.nn-heal .nn-bar { min-width: 40px; }
+.nn-heal .nn-bar > span { background: var(--nn-good); }
+.nn-heal b { flex: none; font-weight: 600; }

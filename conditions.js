@@ -508,6 +508,57 @@ export function evaluateConditions(charData, hours = 0) {
     return { added, removed, progressed, recovering };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ПРОГРЕСС ЛЕЧЕНИЯ 0–100%
+// Растёт сам, пока причина болезни ушла (поели, попили, прошёл курс),
+// и от того, что ИИ видит в ролплее (уход, лекарства, покой — user_heal).
+// Откатывается, если причина вернулась или стало хуже. 100% — здоров.
+// ═══════════════════════════════════════════════════════════════
+function healTick(c, ex, needHours, hours, cureMet, recovering) {
+    const rate = 100 / Math.max(1, needHours);
+    const before = ex.progress || 0;
+    if (cureMet) {
+        if (!ex.recovering) { ex.recovering = true; if (hours > 0) recovering.push(ex.id); }
+        ex.progress = Math.min(100, before + rate * recoverStep(c, hours));
+    } else if (!DISEASE_DB[ex.id]?.event) {
+        // Причина вернулась (снова голод, жажда) — выздоровление откатывается
+        ex.recovering = false;
+        ex.progress = Math.max(0, before - rate * hours * 0.5);
+    } else {
+        // Болезнь-событие идёт своим курсом; набранное лечением не теряется
+        ex.recovering = before > 0;
+    }
+    return ex.progress >= 100;
+}
+
+/** Лечение по ролплею: delta в процентах, шаг ограничен, чтобы не выздоравливать за один ответ */
+export function applyHealDelta(c, id, delta, hours = 0) {
+    const d = c.diseases.find(x => x.id === id);
+    if (!d || !delta) return null;
+    const maxUp = Math.max(15, Math.min(60, hours * 2));
+    const step = Math.max(-30, Math.min(maxUp, delta));
+    d.progress = Math.max(0, Math.min(100, (d.progress || 0) + step));
+    if (step > 0) d.recovering = true;
+    if (d.progress >= 100) {
+        c.diseases = c.diseases.filter(x => x.id !== id);
+        return 'cured';
+    }
+    return step > 0 ? 'better' : 'worse';
+}
+
+/** Найти болезнь по тому, как её назвал ИИ: id, английское или русское название */
+export function resolveDiseaseId(c, name) {
+    const n = String(name || '').toLowerCase().replace(/ё/g, 'е').trim().replace(/\s+/g, '_');
+    if (!n) return null;
+    for (const d of c.diseases) {
+        const def = DISEASE_DB[d.id] || {};
+        const names = [d.id, def.nameEn, def.nameRu, d.name].filter(Boolean)
+            .map(x => String(x).toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, '_'));
+        if (names.some(x => x === n || x.startsWith(n) || n.startsWith(x.split('_')[0]))) return d.id;
+    }
+    return null;
+}
+
 function stageFields(def, stage) {
     const st = def.stages[stage];
     return {
@@ -521,7 +572,7 @@ function makeDisease(def, stage) {
     return {
         id: def.id, name: def.nameRu, nameEn: def.nameEn,
         ...stageFields(def, stage),
-        elapsedHours: 0, recoveryHours: 0, recovering: false, since: '0ч',
+        elapsedHours: 0, progress: 0, recovering: false, since: '0ч',
     };
 }
 
@@ -553,29 +604,13 @@ function evaluateDisease(charData, diseaseDef, hours, added, removed, progressed
 
     const cureConditionsMet = isCured(charData, diseaseDef.cure) || !currentStage;
 
-    if (cureConditionsMet) {
-        // Условия лечения выполнены, но выздоровление требует времени
-        if (!existing.recovering) {
-            existing.recovering = true;
-            existing.recoveryHours = 0;
-            recovering.push(diseaseDef.id);
-        } else {
-            existing.recoveryHours = (existing.recoveryHours || 0) + recoverStep(charData, hours);
-        }
-
-        const needHours = diseaseDef.recovery?.[existing.severity] ?? 6;
-        if (existing.recoveryHours >= needHours) {
-            charData.diseases = charData.diseases.filter(d => d.id !== diseaseDef.id);
-            removed.push(diseaseDef.id);
-        }
+    const needHours = diseaseDef.recovery?.[existing.severity] ?? 6;
+    if (healTick(charData, existing, needHours, hours, cureConditionsMet, recovering)) {
+        charData.diseases = charData.diseases.filter(d => d.id !== diseaseDef.id);
+        removed.push(diseaseDef.id);
         return;
     }
-
-    // ── Условия лечения НЕ выполнены — выздоровление обрывается ──
-    if (existing.recovering) {
-        existing.recovering = false;
-        existing.recoveryHours = 0;
-    }
+    if (cureConditionsMet) return;
 
     // Прогрессия / регрессия стадии
     if (existing.severity !== currentStage) {
@@ -589,7 +624,7 @@ function evaluateDisease(charData, diseaseDef, hours, added, removed, progressed
         existing.modifiers = diseaseDef.stages[currentStage].modifiers;
         existing.symptoms = diseaseDef.stages[currentStage].symptoms;
 
-        if (newIdx > oldIdx) progressed.push(diseaseDef.id);
+        if (newIdx > oldIdx) { progressed.push(diseaseDef.id); existing.progress = Math.max(0, (existing.progress || 0) - 20); }
     }
 }
 
@@ -676,27 +711,18 @@ function evaluateMalnutrition(charData, hours, added, removed, progressed, recov
     existing.since = formatHours(existing.elapsedHours);
 
     const cureMet = days <= def.cure.deficitDays && charData.satiety >= def.cure.satiety;
-    if (cureMet) {
-        if (!existing.recovering) {
-            existing.recovering = true;
-            existing.recoveryHours = 0;
-            recovering.push('malnutrition');
-        } else {
-            existing.recoveryHours = (existing.recoveryHours || 0) + recoverStep(charData, hours);
-        }
-        if (existing.recoveryHours >= (def.recovery?.[existing.severity] ?? 48)) {
-            charData.diseases = charData.diseases.filter(d => d.id !== 'malnutrition');
-            removed.push('malnutrition');
-        }
+    if (healTick(charData, existing, def.recovery?.[existing.severity] ?? 48, hours, cureMet, recovering)) {
+        charData.diseases = charData.diseases.filter(d => d.id !== 'malnutrition');
+        removed.push('malnutrition');
         return;
     }
-    if (existing.recovering) { existing.recovering = false; existing.recoveryHours = 0; }
+    if (cureMet) return;
 
     if (stage && existing.severity !== stage) {
         const order = ['mild', 'moderate', 'severe', 'critical'];
         const worse = order.indexOf(stage) > order.indexOf(existing.severity);
         Object.assign(existing, stageFields(def, stage));
-        if (worse) progressed.push('malnutrition');
+        if (worse) { progressed.push('malnutrition'); existing.progress = Math.max(0, (existing.progress || 0) - 20); }
     }
 }
 
@@ -719,19 +745,17 @@ function customDisease(c, id, stage, cureMet, hours, added, removed, progressed,
     ex.elapsedHours = (ex.elapsedHours || 0) + hours;
     ex.since = formatHours(ex.elapsedHours);
 
-    if (cureMet || !stage) {
-        if (!ex.recovering) { ex.recovering = true; ex.recoveryHours = 0; recovering.push(id); }
-        else ex.recoveryHours = (ex.recoveryHours || 0) + recoverStep(c, hours);
-        if (ex.recoveryHours >= (def.recovery?.[ex.severity] ?? 12)) {
-            c.diseases = c.diseases.filter(d => d.id !== id);
-            removed.push(id);
-        }
+    const ok = cureMet || !stage;
+    if (healTick(c, ex, def.recovery?.[ex.severity] ?? 12, hours, ok, recovering)) {
+        c.diseases = c.diseases.filter(d => d.id !== id);
+        removed.push(id);
         return;
     }
-    if (ex.recovering) { ex.recovering = false; ex.recoveryHours = 0; }
+    if (ok) return;
     if (STAGE_ORDER.indexOf(stage) > STAGE_ORDER.indexOf(ex.severity)) {
         Object.assign(ex, stageFields(def, stage));
         progressed.push(id);
+        ex.progress = Math.max(0, (ex.progress || 0) - 20);
     }
 }
 
@@ -813,7 +837,7 @@ export function checkRefeeding(c, kcal, goal) {
     const ex = c.diseases.find(d => d.id === 'refeeding');
     if (ex) {
         if (STAGE_ORDER.indexOf(stage) > STAGE_ORDER.indexOf(ex.severity)) Object.assign(ex, stageFields(DISEASE_DB.refeeding, stage));
-        ex.recoveryHours = 0;
+        ex.progress = 0;
         return null;
     }
     c.diseases.push({ ...makeDisease(DISEASE_DB.refeeding, stage), recovering: true });
@@ -825,7 +849,13 @@ export function checkRefeeding(c, kcal, goal) {
 // ═══════════════════════════════════════════════════════════════
 function evaluateEffects(c, hours, added, removed) {
     const g = goalOf(c);
-    const T = (id, rule) => toggleEffect(c, id, rule, hours, added, removed);
+    // Эффект, который по ролплею прошёл (user_clear), какое-то время не возвращается
+    c.suppress = c.suppress || {};
+    for (const k of Object.keys(c.suppress)) {
+        c.suppress[k] -= hours;
+        if (c.suppress[k] <= 0) delete c.suppress[k];
+    }
+    const T = (id, rule) => toggleEffect(c, id, c.suppress[id] ? { ...rule, on: false, off: true } : rule, hours, added, removed);
 
     // Старые записи баффов/дебаффов → единый формат
     for (const e of [...c.buffs, ...c.debuffs]) {
@@ -1170,7 +1200,7 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
         const def = DISEASE_DB[d.id];
         const stage = def?.stages?.[d.severity];
         const kind = def?.category === 'mental' ? 'mental' : 'physical';
-        const label = `${d.nameEn || d.name} (${kind}, ${d.severity}${d.recovering ? ', recovering — improving slowly, not instantly' : ''})`;
+        const label = `${d.id} (${kind}, ${d.severity}, healed ${Math.round(d.progress || 0)}%${d.recovering ? ', recovering slowly' : ''})`;
         if (focus.has(d.id)) surface.push(`${label}: ${stage?.symptoms || ''}${cue(d.id)}`);
         else background.push(label);
     }

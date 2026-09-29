@@ -138,7 +138,7 @@ const TAG_RES = [
     /<!--\s*NN\b[\s:]*([\s\S]*?)-->/gi,
     /\[\s*NN\b[\s:]+([^\]\n]*)\]/gi,
 ];
-const KNOWN_KEYS = ['tp', 'date', 'time', 'user_preg', 'bot_preg', 'user_full', 'bot_full', 'user_weight', 'bot_weight', 'activity', 'user_activity', 'bot_activity', 'sleeping',
+const KNOWN_KEYS = ['skip', 'user_heal', 'bot_heal', 'user_clear', 'bot_clear', 'tp', 'date', 'time', 'user_preg', 'bot_preg', 'user_full', 'bot_full', 'user_weight', 'bot_weight', 'activity', 'user_activity', 'bot_activity', 'sleeping',
     'user_feel', 'bot_feel', 'user_profile', 'bot_profile', 'user_state', 'bot_state', 'sleep', 'offscreen', 'ate', 'drank',
     'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care'];
 
@@ -181,15 +181,21 @@ function splitFields(inner) {
     return out;
 }
 
+// Длительность: «1.5», «30 min», «8h», «3 дня», «2 недели», «2 months», «2 месяца», «1 год»
+export const MAX_HOURS = 24 * 400;
 function parseHours(v) {
-    const m = String(v || '').match(/([\d.,]+)\s*(m|min|мин|h|ч|d|д)?/i);
+    const str = String(v || '').toLowerCase();
+    const m = str.match(/([\d.,]+)\s*([a-zа-яё]*)/i);
     if (!m) return null;
     let n = parseFloat(m[1].replace(',', '.'));
     if (isNaN(n) || n < 0) return null;
-    const u = (m[2] || '').toLowerCase();
-    if (u === 'm' || u === 'min' || u === 'мин') n /= 60;
-    if (u === 'd' || u === 'д') n *= 24;
-    return Math.min(n, 720);
+    const u = m[2] || '';
+    if (/^(mo|mon|month|мес)/.test(u)) n *= 24 * 30.4;
+    else if (/^(y|yr|year|год|лет)/.test(u)) n *= 24 * 365;
+    else if (/^(w|wk|week|нед)/.test(u)) n *= 24 * 7;
+    else if (/^(d|day|д|дн|сут)/.test(u)) n *= 24;
+    else if (/^(m|min|мин)/.test(u)) n /= 60;
+    return Math.min(n, MAX_HOURS);
 }
 
 /**
@@ -209,6 +215,9 @@ export function parseNnInner(inner) {
 
     const result = {
         inner: String(inner),
+        skip: f.skip != null && !isEmptyValue(f.skip) ? parseHours(f.skip) : null,
+        userHeal: [], botHeal: [],       // [{ name, delta }] — лечение по ролплею
+        userClear: [], botClear: [],     // id эффектов, которые прошли в ролплее
         tp: f.tp != null ? parseHours(f.tp) : null,
         activity: null,
         userActivity: null,
@@ -247,10 +256,20 @@ export function parseNnInner(inner) {
         const h = +tm[1], mi = +(tm[2] || 0);
         if (h <= 24 && mi < 60) result.clock = (h % 24) + mi / 60;
     }
+    // Беременность: «14», «wk 14», «4 months», «4 месяца», «T2», «2nd trimester», «второй триместр», «0»
     const preg = (v) => {
-        const m = String(v ?? '').match(/\d+/);
-        if (v == null || v === '' || !m) return null;
-        return Math.min(42, +m[0]);
+        if (v == null || v === '') return null;
+        const x = String(v).toLowerCase();
+        const tri = x.match(/(?:t|трим\p{L}*\s*)(\d)|(\d)\s*(?:st|nd|rd|th)?\s*(?:trim|трим)|(перв|втор|трет|first|second|third)\p{L}*\s*(?:trim|трим)/iu);
+        if (tri) {
+            const n = +(tri[1] || tri[2]) || ({ перв: 1, first: 1, втор: 2, second: 2, трет: 3, third: 3 }[tri[3]?.slice(0, 5)] || { перв: 1, втор: 2, трет: 3, first: 1, secon: 2, third: 3 }[tri[3]?.slice(0, 5)]);
+            if (n >= 1 && n <= 3) return { trimester: n };
+        }
+        const m = x.match(/(\d+(?:[.,]\d+)?)\s*([a-zа-яё]*)/i);
+        if (!m) return null;
+        let n = parseFloat(m[1].replace(',', '.'));
+        if (/^(mo|month|мес)/.test(m[2])) n = Math.round(n * 4.345);
+        return Math.min(42, Math.round(n));
     };
     result.userPreg = preg(f.user_preg);
     result.botPreg = preg(f.bot_preg);
@@ -260,6 +279,21 @@ export function parseNnInner(inner) {
         const n = parseFloat(m[0].replace(',', '.'));
         return n >= 0 && n <= 100 ? Math.round(n) : null;
     };
+    // Лечение: «cold:+10, anemia:-5» / «простуда +10»
+    const heal = (v) => {
+        if (!v || isEmptyValue(v)) return [];
+        return String(v).split(/[,;]+/).map(x => x.trim()).filter(Boolean).map(x => {
+            const m = x.match(/^(.+?)[\s:=]*([+\-−]\s*\d+(?:[.,]\d+)?)\s*%?$/);
+            if (!m) return null;
+            return { name: m[1].trim(), delta: parseFloat(m[2].replace(/[−\s]/g, (c) => (c === '−' ? '-' : '')).replace(',', '.')) };
+        }).filter(h => h && !isNaN(h.delta));
+    };
+    result.userHeal = heal(f.user_heal);
+    result.botHeal = heal(f.bot_heal);
+    const clear = (v) => (!v || isEmptyValue(v) ? [] : String(v).split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean));
+    result.userClear = clear(f.user_clear);
+    result.botClear = clear(f.bot_clear);
+
     result.userFull = full(f.user_full);
     result.botFull = full(f.bot_full);
     const weight = (v) => {
