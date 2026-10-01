@@ -148,9 +148,46 @@ export const EFFECT_INFO = {
     craving: {
         name: 'Тяга к еде', kind: 'neutral', icon: 'fa-lemon', every: 3, timed: true,
         text: 'Очень хочется чего-то конкретного',
-        prompt: 'pregnancy craving — wants one specific food badly, right now',
+        prompt: 'craving — wants one specific food badly, right now',
         cues: ['can\'t stop thinking about {x}', 'asks if there is any {x}', 'describes {x} longingly', 'would trade a lot for {x} right now'],
         userCues: ['mouth waters at the mere mention of {x}', 'someone notices the look and goes to find {x}', 'the smell of {x} drifts from somewhere nearby', '{x} turns up on the table or in someone\'s hands'],
+    },
+    // ─── Пищевой профиль: любимое, нелюбимое, отвращение ───
+    favorite_food: {
+        name: 'Любимая еда', kind: 'positive', icon: 'fa-face-smile-beam', every: 2, timed: true,
+        text: 'Ел любимое — настроение теплее, еда в радость',
+        textF: 'Ела любимое — настроение теплее, еда в радость',
+        prompt: 'just had a favourite food — savouring it, warmer mood',
+        cues: ['savours {x} slowly, eyes half-closed', 'reaches for one more bite of {x}', 'mood visibly softens over {x}', 'hums or sighs contentedly over {x}'],
+        userCues: ['a pleased flush over {x}', 'someone notices how much they enjoy {x} and slides over more', 'shoulders loosen at the first taste of {x}'],
+    },
+    disliked_food: {
+        name: 'Невкусно', kind: 'negative', icon: 'fa-face-grimace', every: 2, timed: true,
+        text: 'Пришлось есть нелюбимое — через силу',
+        prompt: 'had to eat something they dislike — forcing it down',
+        cues: ['pushes {x} around the plate', 'chews {x} with a barely hidden grimace', 'washes {x} down quickly', 'leaves most of {x} untouched'],
+        userCues: ['a small involuntary grimace at {x}', 'someone notices and offers to swap the {x} for something else', 'the throat works hard to swallow {x}'],
+    },
+    aversion: {
+        name: 'Отвращение к еде', kind: 'negative', icon: 'fa-ban', every: 3, timed: true,
+        text: 'От одной мысли о еде мутит',
+        prompt: 'food aversion — the smell or sight of one food turns the stomach',
+        cues: ['turns away from the smell of {x}', 'covers the nose near {x}', 'pales when {x} is mentioned', 'asks to take {x} away'],
+        userCues: ['sudden pallor at the smell of {x}', 'someone notices and moves {x} out of reach', 'a gag reflex at {x}, swallowed down'],
+    },
+    sugar_crash: {
+        name: 'Сахарный спад', kind: 'negative', icon: 'fa-candy-cane', every: 3, timed: true,
+        text: 'После сладкого — вялость и снова тянет есть',
+        prompt: 'sugar crash after sweets — sluggish, foggy, hungry again soon',
+        cues: ['a heavy yawn after the sweets', 'loses the thread for a second', 'eyes drift back to the food'],
+        userCues: ['eyelids suddenly heavy after the sweets', 'someone notices the slump', 'a slow, foggy blink'],
+    },
+    warmed: {
+        name: 'Согрелся', nameF: 'Согрелась', kind: 'positive', icon: 'fa-temperature-arrow-up', every: 3, timed: true,
+        text: 'Горячая еда согрела изнутри',
+        prompt: 'warmed through by hot food or drink — loosened, comfortable',
+        cues: ['cups the warm bowl with both hands', 'colour returns to the face', 'shoulders drop as the warmth spreads'],
+        userCues: ['colour returns to their cheeks', 'fingers stop trembling around the warm cup', 'someone notices and pours more'],
     },
     heartburn: {
         name: 'Изжога', kind: 'negative', icon: 'fa-fire', every: 3, timed: true,

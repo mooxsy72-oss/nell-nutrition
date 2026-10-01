@@ -6,7 +6,6 @@
    ═══════════════════════════════════════════════════════════════ */
 
 .nn-ib,
-#nn-notify-container,
 .nn-settings {
     --nn-fg: var(--SmartThemeBodyColor, #dcdcd2);
     --nn-acc: var(--SmartThemeQuoteColor, #e1a35a);
@@ -452,50 +451,8 @@
 .nn-ib .nn-num { width: 6.5em; margin: 0; }
 
 @media (prefers-reduced-motion: reduce) {
-    .nn-chev, .nn-bar > span, .nn-notify { transition: none !important; }
+    .nn-chev, .nn-bar > span { transition: none !important; }
 }
-
-/* ─── Уведомления ─────────────────────────────────────────── */
-#nn-notify-container {
-    position: fixed;
-    top: 56px;
-    right: 14px;
-    z-index: 10050;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-width: min(340px, calc(100vw - 28px));
-    pointer-events: none;
-}
-.nn-notify {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 8px 12px;
-    border: 1px solid var(--nn-line-strong);
-    border-left: 3px solid var(--nn-acc);
-    border-radius: 8px;
-    background: var(--nn-panel);
-    backdrop-filter: blur(var(--SmartThemeBlurStrength, 8px));
-    color: var(--nn-fg);
-    font-size: 0.85em;
-    line-height: 1.35;
-    box-shadow: 0 4px 16px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.35));
-    pointer-events: auto;
-    cursor: pointer;
-    opacity: 0;
-    transform: translateX(16px);
-    transition: opacity 0.25s ease, transform 0.25s ease;
-}
-.nn-notify-show { opacity: 1; transform: none; }
-.nn-notify-hide { opacity: 0; transform: translateX(16px); }
-.nn-notify-ico { color: var(--nn-acc); padding-top: 2px; }
-.nn-notify-warning, .nn-notify-debuff { border-left-color: var(--nn-warn); }
-.nn-notify-warning .nn-notify-ico, .nn-notify-debuff .nn-notify-ico { color: var(--nn-warn); }
-.nn-notify-disease, .nn-notify-error { border-left-color: var(--nn-bad); }
-.nn-notify-disease .nn-notify-ico, .nn-notify-error .nn-notify-ico { color: var(--nn-bad); }
-.nn-notify-success, .nn-notify-buff { border-left-color: var(--nn-good); }
-.nn-notify-success .nn-notify-ico, .nn-notify-buff .nn-notify-ico { color: var(--nn-good); }
 
 /* ─── Панель в меню расширений ────────────────────────────── */
 .nn-settings { display: flex; flex-direction: column; gap: 6px; }
@@ -548,7 +505,7 @@
 .nn-rates > div > i { color: var(--nn-mute); }
 
 /* ─── Психика и активные эффекты ──────────────────────────── */
-.nn-ib, #nn-notify-container { --nn-mind: color-mix(in srgb, var(--nn-acc) 35%, #8f7ad6); }
+.nn-ib { --nn-mind: color-mix(in srgb, var(--nn-acc) 35%, #8f7ad6); }
 .nn-sub-h {
     display: flex;
     align-items: center;
@@ -571,8 +528,6 @@
 .nn-eff-neutral { border-left-color: var(--nn-acc); }
 .nn-eff-neutral > i { color: var(--nn-acc); }
 .nn-note-mind > i { color: var(--nn-mind); }
-.nn-notify-mental { border-left-color: var(--nn-mind); }
-.nn-notify-mental .nn-notify-ico { color: var(--nn-mind); }
 
 
 /* ─── Карточки: сворачивание ─────────────────────────────── */
@@ -636,3 +591,25 @@
 .nn-heal .nn-bar { min-width: 40px; }
 .nn-heal .nn-bar > span { background: var(--nn-good); }
 .nn-heal b { flex: none; font-weight: 600; }
+
+/* ─── Журнал: пищевой профиль ─────────────────────────────── */
+.nn-food-row { margin-top: 8px; }
+.nn-food-row .nn-sub-h i { color: var(--nn-acc); margin-right: 4px; }
+.nn-food-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0; }
+.nn-chip-food {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--nn-line-strong);
+    border-radius: 999px;
+    padding-left: 8px;
+}
+.nn-ib .nn-chip-food-text {
+    background: none; border: none; padding: 1px 0; color: var(--nn-fg); cursor: text; font: inherit;
+}
+.nn-food-add { display: flex; gap: 4px; align-items: center; }
+.nn-ib .nn-food-add .text_pole { flex: 1; margin: 0; padding: 2px 6px; }
+.nn-week-row td { opacity: 0.75; font-style: italic; }
+.nn-wdelta { font-size: 0.9em; margin-left: 2px; }
+.nn-act-line { display: flex; gap: 6px; align-items: baseline; }
+.nn-act-line > i { flex: none; opacity: 0.8; }
+.nn-ib .nn-hint { font-size: 0.85em; margin: 6px 2px 0; }

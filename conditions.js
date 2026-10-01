@@ -913,7 +913,8 @@ function evaluateEffects(c, hours, added, removed) {
 
     // Эффекты с таймером (выспался, похмелье, стыд…) — просто тикают
     for (const id of ['rested', 'well_fed', 'hydrated', 'hangover', 'post_meal_anxiety', 'shame',
-        'morning_sickness', 'craving', 'heartburn', 'baby_kicks']) {
+        'morning_sickness', 'craving', 'heartburn', 'baby_kicks',
+        'favorite_food', 'disliked_food', 'aversion', 'sugar_crash', 'warmed']) {
         T(id, { on: false, off: true, linger: 0 });
     }
 }
@@ -928,6 +929,95 @@ const CRAVINGS = [
     ['мясо', 'meat'], ['свежие фрукты', 'fresh fruit'], ['квашеная капуста', 'sauerkraut'], ['холодное молоко', 'cold milk'],
     ['сыр', 'cheese'], ['мёд', 'honey'], ['что-то острое', 'something spicy'], ['жареная картошка', 'fried potatoes'], ['ягоды', 'berries'],
 ];
+
+const AVERSIONS = [
+    ['запах жареного', 'the smell of frying'], ['мясо', 'meat'], ['рыба', 'fish'], ['кофе', 'coffee'],
+    ['яйца', 'eggs'], ['лук и чеснок', 'onion and garlic'], ['жирное', 'anything fatty'],
+];
+// Выбор из списка: хэш плохо различает строки с отличием в одной цифре, поэтому перемешиваем ещё раз
+const mixChance = (seed) => seededChance(`${seededChance(seed)}|${seed}`);
+const pickIndex = (seed, n) => Math.floor(mixChance(seed) * n) % n;
+const findEffectIn = (c, id) => [...c.buffs, ...c.debuffs].find(x => x.id === id);
+
+// ═══════════════════════════════════════════════════════════════
+// ПИЩЕВОЙ ПРОФИЛЬ: любимое, нелюбимое, тяга — у всех, не только у беременных
+// ═══════════════════════════════════════════════════════════════
+const foodNorm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+// Основы слов от 4 букв: «квашеную капусту» совпадёт с «квашеная капуста»
+const stems = (s) => foodNorm(s).split(' ').filter(w => w.length >= 4).map(w => w.slice(0, Math.max(4, w.length - 2)));
+
+/** Что из списка совпадает с названием съеденного (или null) */
+export function matchFood(item, list = []) {
+    const it = stems(item);
+    if (!it.length) return null;
+    for (const x of list) {
+        const xs = stems(x);
+        if (xs.length && xs.every(s => it.some(w => w.startsWith(s) || s.startsWith(w)))) return x;
+    }
+    return null;
+}
+
+const SWEET_RE = /(сладк|мед|мёд|торт|пирожн|конфет|сахар|варень|пряник|шоколад|леденц|халв|зефир|пастил|мармелад|пирог с (ягод|вишн|яблок|черник)|sweet|cake|candy|honey|pastry|cookie|chocolate|jam|biscuit|donut|dessert)/i;
+const HOT_RE = /(суп|щи|борщ|уха|бульон|похл[её]б|каш|рагу|жарк|чай|кофе|сбитень|взвар|глинтвейн|какао|горяч|тёпл|тепл|soup|stew|broth|porridge|tea|coffee|cocoa|mulled|hot|warm)/i;
+
+/**
+ * События от еды: любимое, нелюбимое, тяга утолена, отвращение, сладкое, горячее.
+ * @param {{ foods: Array, drinks: Array, cold?: boolean, hour: number }} ev
+ */
+export function foodEvents(c, ev, added = []) {
+    const likes = c.food?.likes || [], dislikes = c.food?.dislikes || [];
+    const items = [...(ev.foods || []).filter(f => !f.implied), ...(ev.drinks || [])];
+    if (!items.length) return;
+    const crave = findEffectIn(c, 'craving'), avers = findEffectIn(c, 'aversion');
+    let fav = null, bad = null;
+    for (const f of items) {
+        // Тяга утолена — радость сильнее обычного любимого
+        if (crave && matchFood(f.item, [crave.detail || ''])) {
+            c.debuffs = c.debuffs.filter(e => e.id !== 'craving');
+            c.buffs = c.buffs.filter(e => e.id !== 'craving');
+            fav = crave.detail;
+        }
+        fav = fav || matchFood(f.item, likes);
+        bad = bad || matchFood(f.item, dislikes);
+        // Съела то, от чего воротит, — мутит
+        if (avers && matchFood(f.item, [avers.detail || ''])) grantEffect(c, 'morning_sickness', 2, added);
+    }
+    if (fav) {
+        grantEffect(c, 'favorite_food', 3, added, fav);
+        c.satiety = Math.min(100, c.satiety + 5);
+    }
+    if (bad) {
+        grantEffect(c, 'disliked_food', 2, added, bad);
+        c.satiety = Math.max(0, c.satiety - 5);   // насытило хуже: ели мало и через силу
+    }
+    const sweetKcal = (ev.foods || []).filter(f => SWEET_RE.test(f.item)).reduce((a, f) => a + (f.calories || 0), 0);
+    if (sweetKcal >= 300 && !findEffectIn(c, 'sugar_crash')) {
+        grantEffect(c, 'sugar_crash', 2, added);
+        c.energy = Math.max(0, c.energy - 8);
+    }
+    // Горячее согревает — в старину, холодным утром или вечером; не чаще раза в 6 ч
+    if (ev.cold && items.some(f => HOT_RE.test(f.item)) && !findEffectIn(c, 'warmed')
+        && (c.warmedAt == null || ev.clock - c.warmedAt >= 6)) {
+        c.warmedAt = ev.clock;
+        grantEffect(c, 'warmed', 2, added);
+    }
+}
+
+/**
+ * Тяга к любимому у любого персонажа (у беременных — своя, в pregnancyEvents).
+ * Раз в день, днём, чаще на голодный желудок. Детерминирована — свайп даёт то же.
+ */
+export function cravingEvents(c, ev, added = []) {
+    const likes = c.food?.likes || [];
+    if (c.pregnant || !likes.length || ev.sleeping || ev.hour < 11 || ev.hour >= 22 || c.cravingDay === ev.day) return;
+    c.cravingDay = ev.day;
+    const key = `${c.charId || c.name}|${ev.day}`;
+    if (mixChance(`crave2|${ev.day * 7919}|${c.charId || c.name}`) >= (c.satiety <= 50 ? 0.45 : 0.25)) return;
+    const like = likes[pickIndex(`like2|${ev.day * 7919}|${c.charId || c.name}`, likes.length)];
+    grantEffect(c, 'craving', 4, added, like);
+    const e = findEffectIn(c, 'craving');
+    if (e) e.detailEn = like;
+}
 
 /**
  * @param {{ woke?: boolean, hour?: number, day?: number, turn?: number, mealKcal?: number, activity?: string, sleeping?: boolean }} ev
@@ -956,9 +1046,26 @@ export function pregnancyEvents(c, ev, added = []) {
     if (w >= 8 && w <= 34 && !ev.sleeping && c.cravingDay !== ev.day && ev.hour >= 10) {
         c.cravingDay = ev.day;
         if (seededChance(`${key}|crave`) < 0.4) {
-            const [ru, en] = CRAVINGS[Math.floor(seededChance(`${key}|what`) * CRAVINGS.length)];
+            // Половина тяг — к любимому из пищевого профиля, остальное — классика беременности
+            const likes = c.food?.likes || [];
+            const [ru, en] = likes.length && seededChance(`${key}|fromlikes`) < 0.5
+                ? (x => [x, x])(likes[pickIndex(`${key}|like`, likes.length)])
+                : CRAVINGS[Math.floor(seededChance(`${key}|what`) * CRAVINGS.length)];
             grantEffect(c, 'craving', 4, added, ru);
             const e = [...c.buffs, ...c.debuffs].find(x => x.id === 'craving');
+            if (e) e.detailEn = en;
+        }
+    }
+    // Отвращение к еде: 6–16 неделя, раз в день, в ~30% дней — нелюбимое или классика
+    if (w >= 6 && w <= 16 && !ev.sleeping && c.aversionDay !== ev.day && ev.hour >= 7) {
+        c.aversionDay = ev.day;
+        if (seededChance(`${key}|avers`) < 0.3) {
+            const dis = c.food?.dislikes || [];
+            const [ru, en] = dis.length && seededChance(`${key}|fromdis`) < 0.5
+                ? (x => [x, x])(dis[pickIndex(`${key}|dis`, dis.length)])
+                : AVERSIONS[Math.floor(seededChance(`${key}|avwhat`) * AVERSIONS.length)];
+            grantEffect(c, 'aversion', 6, added, ru);
+            const e = findEffectIn(c, 'aversion');
             if (e) e.detailEn = en;
         }
     }
@@ -1092,7 +1199,7 @@ export function applyTurnEvents(c, ev, added = []) {
 const SURFACE_EVERY_DISEASE = { mild: 5, moderate: 3, severe: 2, critical: 1 };
 const SURFACE_EVERY_ED = { mild: 6, moderate: 4, severe: 3 };
 const SEVERITY_RANK = { critical: 4, severe: 3, moderate: 2, mild: 1 };
-const MAX_FOCUS = 2;
+const MAX_FOCUS = 3;
 
 const DISEASE_CUES = {
     hypoglycemia: ['fine tremor in the fingers', 'cold sweat at the temples', 'a wave of dizziness', 'words come out a little slurred', 'sudden pallor'],
@@ -1141,19 +1248,23 @@ export function updateFocus(charData, turn, changed = new Set(), opts = {}) {
         candidates.push({ id: `ed_${e.id}`, every: SURFACE_EVERY_ED[e.severity] || 4, rank: 9 + (SEVERITY_RANK[e.severity] || 1),
             force: !!opts.foodInScene });
     }
-    for (const d of charData.debuffs) {
+    // Эффекты — и плохие, и хорошие: события вроде «малыш толкается» или «любимая еда» тоже должны быть в сцене
+    for (const d of [...charData.debuffs, ...charData.buffs]) {
         const info = EFFECT_INFO[d.id];
         if (!info?.every) continue;
         if (d.fading && !info.timed && !changed.has(d.id)) continue;   // проходящее — только фон
         const lv = effectLevel(d);
-        candidates.push({ id: d.id, every: info.every, rank: lv?.kind === 'negative' ? 3 : 1 });
+        candidates.push({ id: d.id, every: info.every, rank: lv?.kind === 'negative' ? 3 : 2 });
     }
+    // Не показанное в прошлом ответе (нет в shown=) — повторяем без паузы
+    const retry = opts.retry || new Set();
+    for (const c of candidates) if (retry.has(c.id)) c.force = true;
 
     const critical = new Set(charData.diseases.filter(d => d.severity === 'critical' && !d.recovering).map(d => d.id));
     const due = candidates.filter(c => {
         const last = charData.salience[c.id];
         // Два ответа подряд об одном и том же — только если стало критично
-        if (last !== undefined && turn - last < 2 && !critical.has(c.id)) return false;
+        if (last !== undefined && turn - last < 2 && !critical.has(c.id) && !retry.has(c.id)) return false;
         return c.force || changed.has(c.id) || last === undefined || turn - last >= c.every;
     }).sort((a, b) => ((changed.has(b.id) || b.force) - (changed.has(a.id) || a.force)) || (b.rank - a.rank));
 
@@ -1195,7 +1306,9 @@ function edPrompt(e) {
  * Блок состояния одного персонажа для системного промпта.
  */
 export function buildConditionPrompt(charData, charName, opts = {}) {
-    const focus = new Set(charData.focus || []);
+    // Сцены-события выводятся отдельно, в конце промпта (buildBeats): на глубине 4 в длинных чатах их не видно
+    const focus = new Set(opts.noSurface ? [] : charData.focus || []);
+    const beatIds = new Set(opts.noSurface ? charData.focus || [] : []);
     const surface = [];
     const background = [];
     const cue = (id) => {
@@ -1212,7 +1325,7 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
         const kind = def?.category === 'mental' ? 'mental' : 'physical';
         const label = `${d.id} (${kind}, ${d.severity}, healed ${Math.round(d.progress || 0)}%${d.recovering ? ', recovering slowly' : ''})`;
         if (focus.has(d.id)) surface.push(`${label}: ${stage?.symptoms || ''}${cue(d.id)}`);
-        else background.push(label);
+        else if (!beatIds.has(d.id)) background.push(label);
     }
     for (const e of edList(charData)) {
         const id = `ed_${e.id}`;
@@ -1221,9 +1334,9 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
     }
     for (const d of charData.debuffs) {
         if (focus.has(d.id)) surface.push(`${effectPrompt(d)}.${cue(d.id)}`);
-        else background.push(d.fading && !EFFECT_INFO[d.id]?.timed ? `${effectPrompt(d)} (passing)` : effectPrompt(d));
+        else if (!beatIds.has(d.id)) background.push(d.fading && !EFFECT_INFO[d.id]?.timed ? `${effectPrompt(d)} (passing)` : effectPrompt(d));
     }
-    for (const b of charData.buffs) background.push(effectPrompt(b));
+    for (const b of charData.buffs) if (!beatIds.has(b.id)) background.push(effectPrompt(b));
 
     if (charData.pregnant && charData.pregnancyWeek > 0) {
         const stage = getPregnancyStage(charData.pregnancyWeek);
@@ -1244,6 +1357,34 @@ export function buildConditionPrompt(charData, charName, opts = {}) {
         out.push(`  Background: ${background.join('; ')}.`);
     }
     return out.join('\n');
+}
+
+/**
+ * Сцены-события на этот ответ: то, что модель обязана показать, с id для shown=.
+ * Ставится в правило тега — последнее системное сообщение, его модель видит лучше всего.
+ */
+export function buildBeats(charData, charName, opts = {}) {
+    const out = [];
+    const cue = (id) => {
+        let t = charData.focusCue?.[id] ? ` E.g. ${charData.focusCue[id]}.` : '';
+        if (charData.prevCue?.[id]) t += ` Not again: ${charData.prevCue[id]}.`;
+        return t;
+    };
+    const how = opts.isUser ? ` Show it through ${charName}'s body or the world — ${opts.botName || 'others'} noticing, offering, reacting.` : '';
+    for (const id of charData.focus || []) {
+        let what = null;
+        const d = charData.diseases.find(x => x.id === id);
+        if (d) what = `${DISEASE_DB[id]?.nameEn || id} (${d.severity}): ${DISEASE_DB[id]?.stages?.[d.severity]?.symptoms || ''}`;
+        else if (id.startsWith('ed_')) {
+            const e = edList(charData).find(x => `ed_${x.id}` === id);
+            if (e) what = edPrompt(e);
+        } else {
+            const e = [...charData.debuffs, ...charData.buffs].find(x => x.id === id);
+            if (e) what = effectPrompt(e);
+        }
+        if (what) out.push(`• ${charName} [${id}]: ${what}.${how}${cue(id)}`);
+    }
+    return out;
 }
 
 /** Общие правила для РПП — добавляются в промпт, если оно есть хоть у кого-то */

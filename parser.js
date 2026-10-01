@@ -50,9 +50,11 @@ function splitEntry(entry) {
     return { name: name || raw, amounts };
 }
 
+// «ничего», «ни крошки», «nothing», «не ел» — модель так пишет вместо того, чтобы опустить поле
+const NOTHING_RE = /^(none|null|nil|нет|ничего|ни крошки|ни глотка|пусто|nothing|n\/a|-|—|0|не (ел|ела|ели|пил|пила|пили)\p{L}*|didn'?t (eat|drink)|not eating|no food|no drink)$/u;
 function isEmptyValue(v) {
     const x = norm(v);
-    return !x || /^(none|null|нет|ничего|-|—|n\/a|0)$/.test(x);
+    return !x || NOTHING_RE.test(x);
 }
 
 // Свежие овощи/фрукты (для цинги) и сомнительная еда (для отравлений) — по названию
@@ -131,6 +133,7 @@ const GENERIC_MEAL_RE = /^(еда|поел\p{L}*|перекус\p{L}*|завтр
 function parseFoodEntry(entry) {
     const { name: rawName, amounts } = splitEntry(entry);
     const { name, manner, label } = takeManner(rawName);
+    if (isEmptyValue(name)) return { item: '' };   // «ничего:0»
     // Калории — от ИИ: «ккал» или первое число без единиц
     let kcal = amounts.kcal ?? amounts.bares[0] ?? null;
     // «хлеб:2» — это количество, а не калории
@@ -165,6 +168,7 @@ function waterPer100(name) {
 function parseDrinkEntry(entry, { fromFood = false } = {}) {
     const { name: rawName, amounts } = splitEntry(entry);
     const { name, manner, label } = takeManner(rawName);
+    if (isEmptyValue(name)) return { item: '' };   // «ничего:0:0»
     let ml = amounts.ml ?? amounts.g ?? null;
     let kcal = amounts.kcal;
     const bares = [...amounts.bares];
@@ -221,7 +225,8 @@ const TAG_RES = [
 ];
 const KNOWN_KEYS = ['skip', 'user_heal', 'bot_heal', 'user_clear', 'bot_clear', 'tp', 'date', 'time', 'user_preg', 'bot_preg', 'user_full', 'bot_full', 'user_weight', 'bot_weight', 'activity', 'user_activity', 'bot_activity', 'sleeping',
     'user_feel', 'bot_feel', 'user_profile', 'bot_profile', 'user_state', 'bot_state', 'sleep', 'offscreen', 'ate', 'drank',
-    'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care', 'user_why', 'bot_why'];
+    'user_ate', 'bot_ate', 'user_drank', 'bot_drank', 'vomited', 'user_vomited', 'bot_vomited', 'user_care', 'bot_care', 'user_why', 'bot_why',
+    'shown', 'user_likes', 'bot_likes', 'user_dislikes', 'bot_dislikes', 'user_habits', 'bot_habits'];
 
 /**
  * Содержимое тега из текста. loose=true — для ответа фонового запроса:
@@ -314,6 +319,8 @@ export function parseNnInner(inner) {
         userWeight: null, botWeight: null, // { delta } или { abs } — вес изменился в истории
         userFeel: null, botFeel: null,
         userWhy: null, botWhy: null,     // почему не ест — коротко, для инфоблока
+        shown: null,                     // id событий, которые модель показала в ответе (null — поля не было)
+        userLikes: [], botLikes: [], userDislikes: [], botDislikes: [], userHabits: [], botHabits: [],
         userProfile: null, botProfile: null,
         userState: null, botState: null,
         ate: [], drank: [],
@@ -387,8 +394,14 @@ export function parseNnInner(inner) {
     };
     result.userWeight = weight(f.user_weight);
     result.botWeight = weight(f.bot_weight);
-    result.userWhy = clean(f.user_why, 60);
-    result.botWhy = clean(f.bot_why, 60);
+    result.userWhy = isEmptyValue(f.user_why) ? null : clean(f.user_why, 60);
+    result.botWhy = isEmptyValue(f.bot_why) ? null : clean(f.bot_why, 60);
+    if (f.shown != null) result.shown = isEmptyValue(f.shown) ? [] : String(f.shown).split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+    // Пищевой профиль: «квашеная капуста, мёд»; «-молоко» — разлюбил(а), убрать
+    const prof = (v) => splitList(v || '').map(x => x.replace(/^["«]|["»]$/g, '').trim().slice(0, 50)).filter(x => x && !isEmptyValue(x)).slice(0, 8);
+    result.userLikes = prof(f.user_likes); result.botLikes = prof(f.bot_likes);
+    result.userDislikes = prof(f.user_dislikes); result.botDislikes = prof(f.bot_dislikes);
+    result.userHabits = prof(f.user_habits); result.botHabits = prof(f.bot_habits);
     result.userFeel = clean(f.user_feel);
     result.botFeel = clean(f.bot_feel);
     result.userProfile = parseProfile(f.user_profile);
