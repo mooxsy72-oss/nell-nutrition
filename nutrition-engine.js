@@ -151,10 +151,11 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     if (sick('cold'))                         { energyMult += 0.2; waterMult += 0.15; }
     if (sick('anemia'))                         energyMult += 0.25;
 
-    // Беременность: со второго триместра голод нарастает быстрее
+    // Беременность: со второго триместра голод нарастает чуть быстрее
+    // (норма калорий у беременной и так выше — большие множители давали вечный голод)
     const pw = charData.pregnant ? (charData.pregnancyWeek || 0) : 0;
-    if (pw >= 27) satietyMult += 0.25;
-    else if (pw >= 14) satietyMult += 0.15;
+    if (pw >= 27) satietyMult += 0.12;
+    else if (pw >= 14) satietyMult += 0.08;
 
     energyMult = Math.max(0.5, energyMult);
     waterMult = Math.max(0.6, waterMult);

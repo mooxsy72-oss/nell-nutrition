@@ -746,21 +746,19 @@ function inferActivity(...texts) {
     return null;
 }
 
-// ─── Подтверждение сцен-событий: что модель показала (shown=) ───
-// Не показанное повторяется в следующем ответе, но не больше двух раз
-function trackShown(c, tag) {
-    c.unshown = c.unshown || {};
-    const prev = c.focus || [];
-    const shown = new Set((tag?.shown || []).map(x => resolveEffectId(x) || x));
-    const present = new Set([...c.diseases.map(d => d.id), ...c.debuffs.map(e => e.id), ...c.buffs.map(e => e.id)]);
-    for (const id of prev) {
-        if (shown.has(id) || !tag) { delete c.unshown[id]; continue; }
-        c.unshown[id] = (c.unshown[id] || 0) + 1;
+// ─── Поле тега про другого персонажа? ───
+// Начинается с имени собственного (с большой буквы, и в ответе оно стоит с большой буквы
+// посреди предложения), которое не совпадает с именем чара или игрока
+function aboutSomeoneElse(value, replyText, ownNames) {
+    const m = String(value || '').trim().match(/^([A-ZА-ЯЁ][\p{L}-]{2,})/u);
+    if (!m) return false;
+    const w = m[1];
+    const stem = (x) => x.toLowerCase().replace(/ё/g, 'е').slice(0, Math.max(3, x.length - 2));
+    for (const n of ownNames) {
+        for (const part of String(n || '').split(/\s+/)) if (part.length >= 3 && stem(part) === stem(w)) return false;
     }
-    for (const id of Object.keys(c.unshown)) {
-        if (c.unshown[id] > 2 || !present.has(id)) delete c.unshown[id];
-    }
-    return new Set(Object.keys(c.unshown));
+    const safe = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`[\\p{Ll},;:—–-]\\s+${safe}`, 'u').test(String(replyText || ''));
 }
 
 // ─── Вес для ИИ: сообщаем один раз, когда набежало заметное изменение ───
@@ -824,6 +822,15 @@ function processAiResponse(messageId) {
     // Сутки и больше за один ответ — это скип, даже если ИИ написал tp, а не skip
     if (hours >= 24) declaredSkip = true;
     if (tag?.date) state.rpDate = tag.date;
+
+    // bot_ иногда уезжает на соседнего НПС («Любава сыта…» при чаре Алексее) — такие поля не берём
+    if (tag && bot) {
+        const own = [getBotName(), getUserName()];
+        if (aboutSomeoneElse(tag.botWhy, text, own) || aboutSomeoneElse(tag.botFeel, text, own)) {
+            console.warn('[NN] bot_ поля описывают другого персонажа — пропускаю', tag.botWhy, tag.botFeel);
+            tag.botWhy = null; tag.botFeel = null; tag.botActivity = null;
+        }
+    }
 
     // Активность у каждого своя: из user_/bot_activity, иначе по описанию (почему не ест, самочувствие,
     // что ели), иначе общая сцены. «Сидит у печи» и «строит избу» — это разный расход.
@@ -1047,11 +1054,10 @@ function processAiResponse(messageId) {
     }
 
     // ── Сцены-события: что модель обязана показать в следующем ответе ──
-    // Что было в прошлом списке и не подтверждено в shown= — повторяем (до двух раз)
+    // Не больше одного события на персонажа, 1–2 показа на экземпляр эффекта (см. updateFocus)
     for (const ch of chars) {
         const t = ctx[ch.who];
-        const retry = trackShown(ch.data, tag);
-        updateFocus(ch.data, state.turn, new Set([...t.added, ...t.progressed]), { foodInScene, isUser: ch.who === 'user', retry });
+        updateFocus(ch.data, state.turn, new Set([...t.added, ...t.progressed]), { foodInScene, isUser: ch.who === 'user', clock: state.clockHours });
     }
 
     // ── Снимок для инфоблока этого сообщения ──
@@ -1217,10 +1223,8 @@ function mealPromptLine(c, name, isUser) {
         .map(s => `${s.en} ${m.done[s.id] ? '✓' : h >= s.to ? 'skipped' : 'not yet'}`).join(', ');
     const cur = slots.find(s => h >= s.dueFrom && h < s.to);
     let nudge = '';
-    if (cur && !m.done[cur.id] && c.satiety < 85) {
-        nudge = isUser
-            ? ` It's ${cur.en} time — ${getBotName()} can notice, offer or bring food; whether ${name} eats is the player's call.`
-            : ` It's ${cur.en} time: ${pron(c)} eats at a natural moment in this scene (a proper meal, or something on the go) unless there's a real reason — nausea, work, mood, no food; then that reason goes in bot_why.`;
+    if (cur && !m.done[cur.id] && c.satiety < 60 && !isUser) {
+        nudge = ` It's ${cur.en} time: ${pron(c)} eats at a natural moment unless there's a reason (then bot_why).`;
     }
     return `  Meals today: ${status}.${nudge}`;
 }
@@ -1243,9 +1247,8 @@ function buildStatePrompt() {
     // Правила — только нужные в этом ходу
     const botName = getBotName();
     const rules = [];
-    rules.push(`Bodies drive behaviour. Every listed state — hunger, thirst, tiredness, active effects good or bad, likes and dislikes — quietly shapes how they act: pace, posture, patience, what they reach for or push away. ${botName} looks after ${b ? (b.gender === 'female' ? 'her' : b.gender === 'male' ? 'his' : 'their') : 'their'} own body unprompted: thirsty → drinks, mealtime → eats, drained → sits or rests.`);
-    rules.push('Show needs through action, not talk: a need or effect is said aloud at most once, then only acted on; never reuse an image or phrase from recent replies. Weakness limits what bodies can do.');
-    rules.push(`${userName} is the player's character: no lines, thoughts, feelings or decisions for them — only their body and visible state (pallor, a growling stomach, trembling, heavy eyelids), or the world around them: ${botName} noticing, offering, the needed food or drink turning up.`);
+    rules.push(`These states are quiet background, not the plot: they colour pace, mood and choices without being named. Most replies don't mention them at all; the story and the characters' goals come first. Keep it ordinary and human — no growling, snarling, devouring, possessiveness or animal behaviour around food. ${botName} handles ${b ? (b.gender === 'female' ? 'her' : b.gender === 'male' ? 'his' : 'their') : 'their'} own needs unprompted (drinks when thirsty, eats at mealtimes, rests when drained). Weakness limits what bodies can do.`);
+    rules.push(`${userName} is the player's character: never write their words, thoughts, feelings or actions. Their state shows only rarely, as a brief visible sign.`);
     if ([u, b].some(c => c && c.diseases.some(d => DISEASE_DB[d.id]?.category === 'mental'))) {
         rules.push('Mental states show through behaviour and dialogue, never as a narrated diagnosis.');
     }
@@ -1270,21 +1273,18 @@ function pregQuestion(c, name, prefix) {
 function tagFieldRules(userName, botName) {
     const u = state.user, b = getBotState();
     const preg = [pregQuestion(u, userName, 'user'), pregQuestion(b, botName, 'bot')].filter(Boolean);
-    let n = 0;
-    const q = (text) => `${++n}. ${text}`;
     return [
-        q(`TIME — Did the story jump ahead ("two months later", *skip a week*, OOC)? → skip=DURATION; off-screen meals and sleep are automatic. Otherwise tp = in-world hours since your last reply (a few lines 0.2, a night 8). time = clock now.`),
-        q(`ACTIVITY — each person's own, by what they are doing now: low (sitting, talking, eating, resting) | medium (walking, chores, cooking, riding) | high (running, fighting, building, hauling, heavy work) → user_activity and bot_activity, always both.`),
-        q(`EATING — Look only at ${userName}'s latest message and your reply. EVERY eating in them is logged as a new portion — even the same dish as before ("another slice", "keeps eating", "finishes the stew"). The same bite shown in both messages → once. No eating in these two → leave _ate out entirely; never write "ничего", "nothing", "нет" or 0. Format FOOD (HOW):KCAL. HOW = a short phrase in the roleplay's language showing how much and how, e.g. "всю миску, жадно", "пару ложек через силу", "половину, не спеша" — never a bare "normally". KCAL realistic for that amount with fat, bread, sauce: bread slice 90, porridge with butter 350, pie slice 350, soup with bread 450, stew 700, feast plate 1000+. Ate but no dish named ("after dinner") → still log it: user_ate=ужин (всю тарелку):600. _full = fullness now 0–100, only for someone who ate or drank.`),
-        q(`DRINKING — Same two messages, same rule: every drink is a new portion, even water, tea at the table or a sip. DRINK (HOW):ML:KCAL — sip 30, cup 250, mug 350, pint 500; HOW like "пару глотков", "полкружки залпом"; KCAL only if caloric. Drinks never go in _ate. No drinking → leave _drank out.`),
-        q(`NOT EATING — Anyone who didn't eat this reply → _why = what keeps them from it right now, 3–8 words in the roleplay's language: "ещё не ела — разбирает счета", "сыт после обеда", "мутит с утра".`),
-        preg.length ? q(`PREGNANCY — ${preg.join(' ')}`) : null,
-        q(`TASTES — Did someone clearly show a new favourite or hated food, or an eating habit? → _likes=FOOD / _dislikes=FOOD / _habits=HABIT (only new ones; "-FOOD" if they went off it).`),
-        q(`ONLY IF TRUE: sleeping=true · _vomited=true · _care=true (being treated) · _heal=ID:+N for listed diseases (+5…+15 on treatment or recovery, −N on a setback) · _clear=EFFECT_ID when an effect clearly passed in the story · _weight=+2 / -3 / 62 when the story states it.`),
+        `• tp = in-world hours since your last reply (talk 0.1, a meal 0.5, a night 8); time = clock now. sleeping=true if they slept through most of that span — also on the reply where they wake. A jump ("a week later", *skip*) → skip=DURATION; off-screen meals and sleep are automatic.`,
+        `• _activity, always both: low (sit, talk, eat, rest) | medium (walk, chores, cook, ride) | high (run, fight, haul, heavy work).`,
+        `• _ate = everything eaten in ${userName}'s last message and your reply, each as a new portion — passing mentions too ("перекусили по дороге", "после ужина"), and a second meal right after the first. Earlier tags are already counted: never drop something because it looks like an earlier entry. Same bite in both messages → once. FOOD (HOW):KCAL — HOW = how much and how, a few words ("всю миску", "пару ложек через силу"); KCAL = a quick round guess, no arithmetic (bread slice 100, porridge 350, pie slice 350, soup with bread 450, stew 700, feast 1000+). Nothing eaten → omit; never "ничего"/0.`,
+        `• _drank — same rule: DRINK (HOW):ML:KCAL (sip 30, cup 250, mug 350, pint 500); KCAL only if caloric; drinks never in _ate.`,
+        `• _full = fullness 0–100, only for someone who ate or drank. _why = for anyone who didn't eat, 3–8 words ("сыт после обеда", "ещё не ела — шьёт").`,
+        `• _feel = 3–8 words, body and mind. date = in-world date.`,
+        preg.length ? `• ${preg.join(' ')}` : null,
+        `• Only if true: _vomited=true · _care=true (being treated) · _heal=ID:+N (+5…+15, −N on a setback) · _clear=EFFECT_ID (effect passed) · _weight=+2/-3/62 (story states it) · _likes/_dislikes/_habits=FOOD (new tastes; -FOOD to remove).`,
         isHard()
-            ? `SURVIVAL: on a skip add offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
-            : `On a skip they eat, drink and sleep normally unless the story says otherwise (offscreen=hungry / thirsty).`,
-        `date = in-world date. feel = 3–8 words, body and mind.`,
+            ? `• SURVIVAL: on a skip add offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
+            : `• On a skip they eat, drink and sleep normally unless the story says otherwise (offscreen=hungry / thirsty).`,
     ].filter(Boolean).join('\n');
 }
 
@@ -1316,14 +1316,14 @@ function buildTagPrompt() {
     return `${beatsBlock(userName, botName)}[Nutrition tag — required]
 End every reply with one hidden comment on its own last line:
 ${TAG_TEMPLATE}
-CAPITALS = fill from the scene, copy nothing. Values in the roleplay's language. Omit fields that don't apply. _x = user_x / bot_x.
-Check each question silently, then write the tag — never answer them in the reply:
+user_ = ${userName} (player). bot_ = ${botName} only — other characters in the scene are never tracked and never appear in the tag.
+It's quick bookkeeping, not part of the story: write it last, straight from what happened, without planning it in advance. CAPITALS = fill from the scene, copy nothing. Values in the roleplay's language; omit fields that don't apply.
 ${tagFieldRules(userName, botName)}${catchUpLine()}${foodProfileAsk()}${calibrateNow ? `\nONE-TIME CALIBRATION (this reply only). ${calibrationRules(userName, botName)}` : ''}
 Never skip, mention or explain the comment.`;
 }
 
 // Сцены-события: стоят последними перед ответом, чтобы в длинных чатах модель их не теряла.
-// Модель отмечает показанное в shown=; не показанное повторится в следующий раз.
+// Подаются мягко: одна деталь, один раз, без повторов в следующих ответах.
 function beatsBlock(userName, botName) {
     const u = state.user, b = getBotState();
     const lines = [
@@ -1331,10 +1331,9 @@ function beatsBlock(userName, botName) {
         ...(b ? buildBeats(b, botName, { isUser: false }) : []),
     ];
     if (!lines.length) return '';
-    return `[Scene beats — MUST happen in this reply]
-Each is a real moment in the scene — something that happens, is done, felt in the body or noticed — woven into the action, not a passing mention and not the first or last line. It changes what the character does next, at least a little.
+    return `[Small detail for this reply]
+Work it in once, in a sentence or a gesture, where it fits naturally — mid-scene, not as the topic, and don't return to it in later replies.
 ${lines.join('\n')}
-List the ids you showed in the tag: shown=ID,ID.
 
 `;
 }
@@ -1371,7 +1370,7 @@ function injectPrompt() {
 // ─── Очистка контекста: старые теги не отправляем ───
 // Все данные уже сохранены (в сообщении и в данных чата), модели нужны лишь
 // последние несколько тегов — как образец формата. Сам чат не трогаем.
-const KEEP_TAGS_IN_PROMPT = 3;
+const KEEP_TAGS_IN_PROMPT = 2;
 const NN_COMMENT_RE = /\s*<!--\s*NN\b[\s\S]*?-->/gi;
 
 function stripOldTagsFromMessages(list) {
@@ -2174,7 +2173,7 @@ function debugApply(code, who) {
         if (id === 'perfect') data.reserve = g * 0.8;
     }
     evaluateConditions(data, 0);
-    updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true, isUser: who === 'user' });
+    updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true, isUser: who === 'user', clock: state.clockHours });
     saveState();
     injectPrompt();
     renderLiveBlock();

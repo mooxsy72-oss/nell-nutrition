@@ -867,8 +867,8 @@ function evaluateEffects(c, hours, added, removed) {
     // (небольшой зазор между «включить» и «выключить» — чтобы не мигали)
     T('hunger', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 4, off: c.satiety > 25 });
     T('dehydration', { on: c.water <= 25, off: c.water > 30 });
-    T('irritability', { on: c.satiety <= 30 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
-        off: c.satiety > 35 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });
+    T('irritability', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
+        off: c.satiety > 30 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });
     T('overeating', { on: (c.recentIntake || 0) > g * 0.6, off: (c.recentIntake || 0) < g * 0.45 });
     const starving = c.diseases.some(d => d.id === 'starvation');
     // Замедленный обмен — приспособление тела, проходит не сразу, а через сутки нормального питания
@@ -907,13 +907,16 @@ function evaluateEffects(c, hours, added, removed) {
     // Сытость уходит сразу, как только снова проголодался
     if (c.satiety < 50) c.buffs = c.buffs.filter(b => b.id !== 'well_fed');
 
-    // Беременность: со второго триместра голод просыпается раньше
+    // Беременность: со второго триместра голод просыпается раньше — но эффект только когда правда голодна
     const pw = c.pregnant ? (c.pregnancyWeek || 0) : 0;
-    T('pregnancy_appetite', { on: pw >= 14 && c.satiety <= 50, off: pw < 14 || c.satiety > 65, linger: 0 });
+    T('pregnancy_appetite', { on: pw >= 14 && c.satiety <= 35 && !hasEffect(c, 'hunger'), off: pw < 14 || c.satiety > 50 || hasEffect(c, 'hunger'), linger: 0 });
+    // «Малыш толкается» удалён — к питанию не относится; чистим старые сохранения
+    c.buffs = c.buffs.filter(b => b.id !== 'baby_kicks');
+    c.debuffs = c.debuffs.filter(b => b.id !== 'baby_kicks');
 
     // Эффекты с таймером (выспался, похмелье, стыд…) — просто тикают
     for (const id of ['rested', 'well_fed', 'hydrated', 'hangover', 'post_meal_anxiety', 'shame',
-        'morning_sickness', 'craving', 'heartburn', 'baby_kicks',
+        'morning_sickness', 'craving', 'heartburn',
         'favorite_food', 'disliked_food', 'aversion', 'sugar_crash', 'warmed']) {
         T(id, { on: false, off: true, linger: 0 });
     }
@@ -1073,10 +1076,6 @@ export function pregnancyEvents(c, ev, added = []) {
     if (w >= 27 && (ev.mealKcal || 0) >= g * 0.2 && seededChance(`${key}|${ev.turn}|burn`) < 0.5) {
         grantEffect(c, 'heartburn', 2, added);
     }
-    // Шевеления: с 20 недели, в спокойные моменты, примерно каждый четвёртый ход
-    if (w >= 20 && !ev.sleeping && ev.activity === 'low' && seededChance(`${key}|${ev.turn}|kick`) < 0.25) {
-        grantEffect(c, 'baby_kicks', 1, added);
-    }
     return out;
 }
 
@@ -1191,21 +1190,28 @@ export function applyTurnEvents(c, ev, added = []) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ЗАМЕТНОСТЬ СОСТОЯНИЙ — против однотипных ответов
-// Каждое состояние «всплывает» в промпте раз в N ходов (тяжёлое — чаще),
-// сразу при появлении/ухудшении, не больше двух за раз. РПП всплывает
-// ещё и тогда, когда в сцене ели.
+// ЗАМЕТНОСТЬ СОСТОЯНИЙ — что попадает в сцену
+// Раньше эффект повторялся каждые N ответов, а ответ — это ~0,1 игрового часа,
+// поэтому тяга на 4 ч всплывала 10+ раз. Теперь:
+//   • эффект: 1 показ на экземпляр (голод, жажда, опьянение — до 2, с паузой в игровых часах);
+//     большинство эффектов — не чаще раза в игровой день;
+//   • болезни и РПП — по игровым часам (лёгкая раз в 8 ч, тяжёлая раз в 3 ч);
+//   • не больше одного события на персонажа за ответ и пауза минимум 4 ответа
+//     между событиями одного персонажа (кроме критического).
+// Показ засчитывается, когда событие выдано в промпт: shown= больше не нужен.
 // ═══════════════════════════════════════════════════════════════
-const SURFACE_EVERY_DISEASE = { mild: 5, moderate: 3, severe: 2, critical: 1 };
-const SURFACE_EVERY_ED = { mild: 6, moderate: 4, severe: 3 };
+const DISEASE_GAP_H = { mild: 8, moderate: 5, severe: 3, critical: 1 };
+const ED_GAP_H = { mild: 12, moderate: 8, severe: 5 };
 const SEVERITY_RANK = { critical: 4, severe: 3, moderate: 2, mild: 1 };
-const MAX_FOCUS = 3;
+const MAX_FOCUS = 1;          // событий на персонажа за ответ
+const CHAR_GAP_TURNS = 4;     // ответов между событиями одного персонажа
+const NEW_GAP_TURNS = 2;      // новое (только что появившееся) — можно чуть раньше
 
 const DISEASE_CUES = {
-    hypoglycemia: ['fine tremor in the fingers', 'cold sweat at the temples', 'a wave of dizziness', 'words come out a little slurred', 'sudden pallor'],
-    dehydration_disease: ['pounding headache', 'dizzy when standing up', 'skin looks dry and papery', 'heart racing at rest'],
-    starvation: ['clothes hang looser than before', 'constantly cold', 'muscles give out quickly', 'cheekbones sharper than before'],
-    malnutrition: ['dull, tired-looking skin', 'a bruise that seems slow to fade', 'tires faster than expected', 'looks paler than usual'],
+    hypoglycemia: ['fine tremor in the fingers', 'cold sweat at the temples', 'a wave of dizziness', 'sudden pallor'],
+    dehydration_disease: ['pounding headache', 'dizzy when standing up', 'heart racing at rest'],
+    starvation: ['clothes hang looser than before', 'constantly cold', 'muscles give out quickly'],
+    malnutrition: ['dull, tired-looking skin', 'tires faster than expected', 'looks paler than usual'],
 };
 
 function hashStr(s) {
@@ -1218,8 +1224,7 @@ function cuesFor(c, id, isUser = false) {
     if (id.startsWith('ed_')) return ED_DB[id.slice(3)]?.cues;
     const d = c.diseases.find(x => x.id === id);
     if (d) return DISEASE_DB[id]?.stages?.[d.severity]?.cues || DISEASE_CUES[id];
-    // Для персонажа игрока — только тело и мир вокруг: мысли и слова {{user}} ИИ не пишет,
-    // поэтому «спрашивает, есть ли капуста» он бы просто выбросил
+    // Для персонажа игрока — только тело и мир вокруг: мысли и слова {{user}} ИИ не пишет
     const info = EFFECT_INFO[id];
     return (isUser && info?.userCues) || info?.cues;
 }
@@ -1233,59 +1238,72 @@ function fillCue(c, id, cue) {
 
 /**
  * @param {Set<string>} changed — появившиеся/ухудшившиеся id
- * @param {{ foodInScene?: boolean, isUser?: boolean }} opts
+ * @param {{ foodInScene?: boolean, isUser?: boolean, clock?: number }} opts
  */
 export function updateFocus(charData, turn, changed = new Set(), opts = {}) {
-    charData.salience = charData.salience || {};
-    const candidates = [];
+    const c = charData;
+    const clock = opts.clock ?? 0;
+    const day = Math.floor(clock / 24);
+    c.seenAt = c.seenAt || {};      // id → игровые часы последнего показа
+    c.shownDay = c.shownDay || {};  // id → игровой день последнего показа
+    delete c.salience;              // старый учёт по ходам
+    const cands = [];
 
-    for (const d of charData.diseases) {
-        const every = (SURFACE_EVERY_DISEASE[d.severity] || 3) + (d.recovering ? 2 : 0);
+    for (const d of c.diseases) {
         const cat = DISEASE_DB[d.id]?.category;
-        candidates.push({ id: d.id, every, rank: (cat === 'mental' ? 8 : 10) + (SEVERITY_RANK[d.severity] || 1) });
+        cands.push({ id: d.id, gapH: (DISEASE_GAP_H[d.severity] ?? 5) * (d.recovering ? 1.5 : 1),
+            rank: (cat === 'mental' ? 8 : 10) + (SEVERITY_RANK[d.severity] || 1),
+            critical: d.severity === 'critical' && !d.recovering });
     }
-    for (const e of edList(charData)) {
-        candidates.push({ id: `ed_${e.id}`, every: SURFACE_EVERY_ED[e.severity] || 4, rank: 9 + (SEVERITY_RANK[e.severity] || 1),
-            force: !!opts.foodInScene });
+    for (const e of edList(c)) {
+        // РПП — чаще, когда в сцене едят, но тоже по часам
+        const gap = ED_GAP_H[e.severity] ?? 8;
+        cands.push({ id: `ed_${e.id}`, gapH: opts.foodInScene ? gap / 2 : gap, rank: 9 + (SEVERITY_RANK[e.severity] || 1) });
     }
-    // Эффекты — и плохие, и хорошие: события вроде «малыш толкается» или «любимая еда» тоже должны быть в сцене
-    for (const d of [...charData.debuffs, ...charData.buffs]) {
-        const info = EFFECT_INFO[d.id];
+    for (const e of [...c.debuffs, ...c.buffs]) {
+        const info = EFFECT_INFO[e.id];
         if (!info?.every) continue;
-        if (d.fading && !info.timed && !changed.has(d.id)) continue;   // проходящее — только фон
-        const lv = effectLevel(d);
-        candidates.push({ id: d.id, every: info.every, rank: lv?.kind === 'negative' ? 3 : 2 });
+        if (e.fading && !info.timed && !changed.has(e.id)) continue;   // проходящее — только фон
+        if ((e.shows || 0) >= (info.shows ?? 1)) continue;             // этот экземпляр уже показан
+        if (info.daily !== false && c.shownDay[e.id] === day && !e.shows) continue;   // раз в день
+        cands.push({ id: e.id, gapH: info.gapH ?? 3, eff: e,
+            rank: effectLevel(e)?.kind === 'negative' || info.kind === 'negative' ? 3 : 2 });
     }
-    // Не показанное в прошлом ответе (нет в shown=) — повторяем без паузы
-    const retry = opts.retry || new Set();
-    for (const c of candidates) if (retry.has(c.id)) c.force = true;
 
-    const critical = new Set(charData.diseases.filter(d => d.severity === 'critical' && !d.recovering).map(d => d.id));
-    const due = candidates.filter(c => {
-        const last = charData.salience[c.id];
-        // Два ответа подряд об одном и том же — только если стало критично
-        if (last !== undefined && turn - last < 2 && !critical.has(c.id) && !retry.has(c.id)) return false;
-        return c.force || changed.has(c.id) || last === undefined || turn - last >= c.every;
-    }).sort((a, b) => ((changed.has(b.id) || b.force) - (changed.has(a.id) || a.force)) || (b.rank - a.rank));
+    const lastBeat = c.lastBeatTurn ?? -99;
+    const due = cands.filter(x => {
+        const seen = c.seenAt[x.id];
+        if (seen != null && clock - seen < x.gapH && !changed.has(x.id)) return false;
+        const need = x.critical ? 0 : changed.has(x.id) ? NEW_GAP_TURNS : CHAR_GAP_TURNS;
+        return turn - lastBeat >= need;
+    }).sort((a, b) => (changed.has(b.id) - changed.has(a.id)) || (b.rank - a.rank));
 
-    const focus = due.slice(0, MAX_FOCUS).map(c => c.id);
-    charData.focusCue = {};
-    charData.lastCue = charData.lastCue || {};
-    charData.prevCue = {};
+    const focus = due.slice(0, MAX_FOCUS).map(x => x.id);
+    c.focusCue = {};
+    c.lastCue = c.lastCue || {};
+    c.prevCue = {};
     for (const id of focus) {
-        charData.salience[id] = turn;
-        const pool = (cuesFor(charData, id, !!opts.isUser) || []).map(x => fillCue(charData, id, x));
+        const x = due.find(y => y.id === id);
+        c.seenAt[id] = clock;
+        c.lastBeatTurn = turn;
+        if (x.eff) {
+            x.eff.shows = (x.eff.shows || 0) + 1;
+            c.shownDay[id] = day;
+        }
+        const pool = (cuesFor(c, id, !!opts.isUser) || []).map(q => fillCue(c, id, q));
         if (!pool.length) continue;
-        // Подсказка каждый раз новая: не та, что была в прошлый раз
-        let idx = (turn + hashStr(charData.name || '') + hashStr(id)) % pool.length;
-        if (pool.length > 1 && pool[idx] === charData.lastCue[id]) idx = (idx + 1) % pool.length;
-        if (charData.lastCue[id]) charData.prevCue[id] = charData.lastCue[id];
-        charData.focusCue[id] = pool[idx];
-        charData.lastCue[id] = pool[idx];
+        let idx = (turn + hashStr(c.name || '') + hashStr(id)) % pool.length;
+        if (pool.length > 1 && pool[idx] === c.lastCue[id]) idx = (idx + 1) % pool.length;
+        if (c.lastCue[id] && !x.eff) c.prevCue[id] = c.lastCue[id];   // «не повторяй» — только для болезней
+        c.focusCue[id] = pool[idx];
+        c.lastCue[id] = pool[idx];
     }
-    const present = new Set(candidates.map(c => c.id));
-    for (const id of Object.keys(charData.salience)) if (!present.has(id)) delete charData.salience[id];
-    charData.focus = focus;
+    const present = new Set(cands.map(x => x.id));
+    for (const id of Object.keys(c.seenAt)) {
+        if (!present.has(id) && !hasEffect(c, id) && !c.diseases.some(d => d.id === id)) delete c.seenAt[id];
+    }
+    for (const id of Object.keys(c.shownDay)) if (c.shownDay[id] < day - 1) delete c.shownDay[id];
+    c.focus = focus;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1370,7 +1388,8 @@ export function buildBeats(charData, charName, opts = {}) {
         if (charData.prevCue?.[id]) t += ` Not again: ${charData.prevCue[id]}.`;
         return t;
     };
-    const how = opts.isUser ? ` Show it through ${charName}'s body or the world — ${opts.botName || 'others'} noticing, offering, reacting.` : '';
+    // Персонаж игрока: только видимый признак или реакция других — без его слов, мыслей и поступков
+    const how = opts.isUser ? ` Only as a visible sign or someone else's reaction.` : '';
     for (const id of charData.focus || []) {
         let what = null;
         const d = charData.diseases.find(x => x.id === id);
@@ -1382,7 +1401,7 @@ export function buildBeats(charData, charName, opts = {}) {
             const e = [...charData.debuffs, ...charData.buffs].find(x => x.id === id);
             if (e) what = effectPrompt(e);
         }
-        if (what) out.push(`• ${charName} [${id}]: ${what}.${how}${cue(id)}`);
+        if (what) out.push(`• ${charName}: ${what}.${how}${cue(id)}`);
     }
     return out;
 }

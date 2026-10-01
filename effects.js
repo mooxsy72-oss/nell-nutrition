@@ -3,42 +3,45 @@
 // kind: positive | negative | neutral. Хранятся в charData.buffs (positive)
 // и charData.debuffs (negative/neutral) — так совместимо со старыми сохранениями.
 
+// Как часто эффект попадает в сцену (см. updateFocus в conditions.js):
+//   every — эффект вообще может всплывать (значение больше не используется как период)
+//   shows — сколько раз показать один экземпляр за всё время действия (по умолчанию 1)
+//   gapH  — минимум игровых часов между показами одного экземпляра (если shows > 1)
+//   daily — не чаще раза в игровой день (по умолчанию да; голод, жажда и т.п. — нет)
+// Формулировки нейтральные: без рычания, жадности, «звериного» поведения.
 export const EFFECT_INFO = {
     // ─── Голод и жажда ───
     hunger: {
-        name: 'Голод', kind: 'negative', icon: 'fa-utensils', every: 4,
+        name: 'Голод', kind: 'negative', icon: 'fa-utensils', every: 1, shows: 2, gapH: 4, daily: false,
         text: 'Хочется есть, силы тратятся быстрее',
-        prompt: 'hungry — shorter temper, harder to focus, tires a bit faster',
-        cues: ['attention drifts to a smell of food nearby', 'a hollow, light-headed pause before answering',
-            'eyes linger a second too long on someone else\'s food', 'a quiet growl from the stomach, quickly ignored',
-            'hands feel a little weak gripping something'],
-        userCues: ['a loud growl from their stomach in a quiet moment', 'hands a little shaky', 'someone nearby notices how they look at the food and pushes a plate their way', 'the smell of cooking drifts past right on cue'],
+        prompt: 'hungry — a little less patient, harder to focus',
+        cues: ['suggests getting something to eat', 'a light-headed pause before answering', 'mentions they skipped a meal'],
+        userCues: ['a quiet rumble from their stomach', 'someone suggests they eat something'],
     },
     dehydration: {
-        name: 'Жажда', kind: 'negative', icon: 'fa-droplet-slash', every: 4,
+        name: 'Жажда', kind: 'negative', icon: 'fa-droplet-slash', every: 1, shows: 2, gapH: 3, daily: false,
         text: 'Хочется пить, силы тратятся быстрее',
         prompt: 'thirsty — dry mouth, mild headache, a little sluggish',
         cues: ['lips dry, licked absently', 'a dull ache behind the eyes', 'voice slightly hoarse',
             'glances toward any source of water', 'swallowing feels dry and scratchy'],
-        userCues: ['lips visibly dry and cracked', 'voice comes out hoarse', 'someone notices and hands them water', 'a dull headache shows in a wince'],
+        userCues: ['lips look dry', 'someone hands them water'],
     },
     irritability: {
-        name: 'Раздражительность', kind: 'negative', icon: 'fa-face-angry', every: 4, mental: true,
+        name: 'Раздражительность', kind: 'negative', icon: 'fa-face-angry', every: 1, mental: true,
         text: 'Вспыльчивость, меньше терпения',
-        prompt: 'irritable from hunger — snappier, less patient, small things grate; not rage, just a short fuse',
-        cues: ['a sharper tone than intended', 'impatience with a slow answer', 'sighs at a minor delay',
-            'a clipped reply, regretted a moment later'],
-        userCues: ['jaw visibly tight', 'someone notices the short fuse and offers a snack', 'a muscle ticks at the temple'],
+        prompt: 'a bit irritable because hungry — slightly short-tempered, nothing more',
+        cues: ['a sharper tone than intended', 'sighs at a minor delay', 'a clipped reply, regretted a moment later'],
+        userCues: ['someone notices they seem tired and hungry and offers food'],
     },
     overeating: {
-        name: 'Переедание', kind: 'negative', icon: 'fa-weight-hanging', every: 3,
+        name: 'Переедание', kind: 'negative', icon: 'fa-weight-hanging', every: 1,
         text: 'Тяжесть в животе, вялость',
         prompt: 'overfull — heavy stomach, sluggish, wants to sit down',
         cues: ['shifts to ease a heavy stomach', 'waves off more food', 'moves more slowly than usual'],
-        userCues: ['a stomach visibly too full, belt pressing', 'a small involuntary hiccup', 'someone offers more and notices the heaviness'],
+        userCues: ['moves a little slower after the meal', 'someone notices they have had enough'],
     },
     slow_metabolism: {
-        name: 'Замедленный обмен', kind: 'negative', icon: 'fa-temperature-low', every: 6,
+        name: 'Замедленный обмен', kind: 'negative', icon: 'fa-temperature-low', every: 1,
         text: 'Тело экономит силы: калорий тратится меньше, быстро мёрзнет',
         prompt: 'body in energy-saving mode after days of too little food — feels cold easily, low stamina, slow to warm up',
         cues: ['pulls a layer tighter against a chill no one else feels', 'cold fingertips', 'needs longer to get going'],
@@ -47,7 +50,7 @@ export const EFFECT_INFO = {
 
     // ─── Сон и силы ───
     exhaustion: {
-        name: 'Истощение сил', kind: 'negative', icon: 'fa-face-tired', every: 3,
+        name: 'Истощение сил', kind: 'negative', icon: 'fa-face-tired', every: 1, shows: 2, gapH: 3, daily: false,
         text: 'Сил почти нет: тяжёлые действия не удаются',
         prompt: 'exhausted — heavy limbs, slow reactions; strenuous actions fail easily',
         cues: ['movements heavy and deliberate', 'needs a moment to steady after standing',
@@ -55,14 +58,14 @@ export const EFFECT_INFO = {
         userCues: ['knees nearly buckle after standing', 'breath short after small effort', 'someone steadies them by the elbow'],
     },
     drowsiness: {
-        name: 'Сонливость', kind: 'negative', icon: 'fa-bed', every: 5,
+        name: 'Сонливость', kind: 'negative', icon: 'fa-bed', every: 1,
         text: 'Клонит в сон, внимание рассеивается',
         prompt: 'sleepy — attention drifts, reactions a touch slow',
         cues: ['a suppressed yawn', 'loses the thread of a sentence for a second', 'rubs the eyes', 'slower to react to a question'],
         userCues: ['a yawn escapes before they can stop it', 'eyelids heavy', 'someone remarks that they look half asleep'],
     },
     sleep_deprived: {
-        name: 'Недосып', kind: 'negative', icon: 'fa-eye-slash', every: 4,
+        name: 'Недосып', kind: 'negative', icon: 'fa-eye-slash', every: 1,
         text: 'Давно без сна: силы уходят быстрее, слабее иммунитет',
         prompt: 'awake far too long — foggy, emotionally raw, misses details',
         cues: ['stares a beat too long at nothing', 'laughs at something not that funny', 'forgets what was just said',
@@ -83,14 +86,14 @@ export const EFFECT_INFO = {
         prompt: 'caffeinated — alert, a bit quicker',
     },
     caffeine_jitters: {
-        name: 'Перебор кофеина', kind: 'negative', icon: 'fa-heart-circle-bolt', every: 3,
+        name: 'Перебор кофеина', kind: 'negative', icon: 'fa-heart-circle-bolt', every: 1,
         text: 'Дрожь в руках, сердцебиение, тревожность',
         prompt: 'too much caffeine — jittery, restless, heart racing, a little anxious',
         cues: ['a tapping foot that won\'t stop', 'fingers drum on the table', 'talks a touch too fast'],
         userCues: ['a visible tremor in the hands', 'heart pounding hard enough to notice', 'someone notices the restless leg'],
     },
     intoxication: {
-        name: 'Опьянение', kind: 'neutral', icon: 'fa-wine-glass', every: 3,
+        name: 'Опьянение', kind: 'neutral', icon: 'fa-wine-glass', every: 1, shows: 2, gapH: 1.5, daily: false,
         text: '',
         levels: [
             { min: 0.3, name: 'Лёгкое опьянение', kind: 'neutral', text: 'Расслаблен, разговорчив', textF: 'Расслаблена, разговорчива',
@@ -105,7 +108,7 @@ export const EFFECT_INFO = {
         userCues: ['cheeks flushed', 'a stumble on an easy step', 'someone steadies them or takes the glass away'],
     },
     hangover: {
-        name: 'Похмелье', kind: 'negative', icon: 'fa-head-side-virus', every: 3, timed: true,
+        name: 'Похмелье', kind: 'negative', icon: 'fa-head-side-virus', every: 1, timed: true,
         text: 'Болит голова, мутит, сильно хочется пить',
         prompt: 'hungover — pounding head, light-sensitive, queasy, very thirsty',
         cues: ['winces at a loud sound', 'squints against the light', 'nurses a cup of water', 'queasy at the smell of food'],
@@ -114,7 +117,7 @@ export const EFFECT_INFO = {
 
     // ─── РПП ───
     post_meal_anxiety: {
-        name: 'Тревога после еды', kind: 'negative', icon: 'fa-face-frown', every: 3, timed: true, mental: true,
+        name: 'Тревога после еды', kind: 'negative', icon: 'fa-face-frown', every: 1, timed: true, mental: true, daily: false,
         text: 'Беспокойство, навязчивые мысли о съеденном',
         prompt: 'anxious after eating — restless, preoccupied with what was eaten, may withdraw',
         cues: ['goes quiet after the meal', 'fidgets with a sleeve', 'finds a reason to step away',
@@ -122,7 +125,7 @@ export const EFFECT_INFO = {
         userCues: ['someone notices the untouched rest of the plate', 'shoulders stiff after the meal', 'someone quietly changes the subject away from food'],
     },
     shame: {
-        name: 'Стыд и вина', kind: 'negative', icon: 'fa-face-sad-tear', every: 3, timed: true, mental: true,
+        name: 'Стыд и вина', kind: 'negative', icon: 'fa-face-sad-tear', every: 1, timed: true, mental: true, daily: false,
         text: 'Подавленность, хочется спрятаться',
         prompt: 'ashamed after an episode with food — withdrawn, avoids eye contact, self-critical, secretive',
         cues: ['avoids eye contact', 'answers in single words', 'covers it with a forced smile', 'wants to be alone'],
@@ -131,77 +134,70 @@ export const EFFECT_INFO = {
 
     // ─── Беременность: события ───
     morning_sickness: {
-        name: 'Утренняя тошнота', kind: 'negative', icon: 'fa-face-grimace', every: 4, timed: true,
+        name: 'Утренняя тошнота', kind: 'negative', icon: 'fa-face-grimace', every: 1, timed: true,
         text: 'Мутит, еда почти не лезет и хуже насыщает',
         prompt: 'morning sickness — queasy, food and strong smells turn the stomach; can barely eat',
         cues: ['turns away from the smell of cooking', 'nibbles a dry crust and stops', 'a hand pressed to the mouth',
             'pale, breathing slowly through the nose', 'pushes the plate away after two bites'],
-        userCues: ['sudden pallor at the smell of food', 'a wave of nausea stops them mid-step', 'someone notices and opens a window or brings dry bread and water', 'cold sweat on the upper lip'],
+        userCues: ['looks pale at the smell of food', 'someone opens a window or brings dry bread and water'],
     },
     pregnancy_appetite: {
-        name: 'Зверский аппетит', kind: 'neutral', icon: 'fa-drumstick-bite', every: 3,
-        text: 'Голод просыпается раньше обычного',
-        prompt: 'pregnant and ravenous — hungry sooner than usual, thinks about the next meal',
-        cues: ['eyes the bread basket', 'asks when dinner will be', 'finishes a plate faster than expected', 'raids the pantry'],
-        userCues: ['stomach growls surprisingly loudly', 'someone teases that the baby is hungry again and offers food', 'someone brings a snack without being asked'],
+        name: 'Аппетит', kind: 'neutral', icon: 'fa-drumstick-bite', every: 1,
+        text: 'Беременность: голод просыпается чуть раньше обычного',
+        prompt: 'pregnant — gets hungry a little sooner than before; an ordinary appetite, nothing dramatic',
+        cues: ['gladly takes a second helping', 'mentions she could eat something'],
+        userCues: ['someone offers her a bite to eat'],
     },
     craving: {
-        name: 'Тяга к еде', kind: 'neutral', icon: 'fa-lemon', every: 3, timed: true,
+        name: 'Тяга к еде', kind: 'neutral', icon: 'fa-lemon', every: 1, timed: true,
         text: 'Очень хочется чего-то конкретного',
-        prompt: 'craving — wants one specific food badly, right now',
-        cues: ['can\'t stop thinking about {x}', 'asks if there is any {x}', 'describes {x} longingly', 'would trade a lot for {x} right now'],
-        userCues: ['mouth waters at the mere mention of {x}', 'someone notices the look and goes to find {x}', 'the smell of {x} drifts from somewhere nearby', '{x} turns up on the table or in someone\'s hands'],
+        prompt: 'fancies one particular food today',
+        cues: ['asks if there is any {x}', 'mentions {x} in passing'],
+        userCues: ['someone mentions they have {x}', '{x} turns up on the table'],
     },
     // ─── Пищевой профиль: любимое, нелюбимое, отвращение ───
     favorite_food: {
-        name: 'Любимая еда', kind: 'positive', icon: 'fa-face-smile-beam', every: 2, timed: true,
+        name: 'Любимая еда', kind: 'positive', icon: 'fa-face-smile-beam', every: 1, timed: true,
         text: 'Ел любимое — настроение теплее, еда в радость',
         textF: 'Ела любимое — настроение теплее, еда в радость',
         prompt: 'just had a favourite food — savouring it, warmer mood',
-        cues: ['savours {x} slowly, eyes half-closed', 'reaches for one more bite of {x}', 'mood visibly softens over {x}', 'hums or sighs contentedly over {x}'],
-        userCues: ['a pleased flush over {x}', 'someone notices how much they enjoy {x} and slides over more', 'shoulders loosen at the first taste of {x}'],
+        cues: ['mood visibly softens over {x}', 'compliments the {x}'],
+        userCues: ['someone notices they enjoy the {x}'],
     },
     disliked_food: {
-        name: 'Невкусно', kind: 'negative', icon: 'fa-face-grimace', every: 2, timed: true,
+        name: 'Невкусно', kind: 'negative', icon: 'fa-face-grimace', every: 1, timed: true,
         text: 'Пришлось есть нелюбимое — через силу',
         prompt: 'had to eat something they dislike — forcing it down',
         cues: ['pushes {x} around the plate', 'chews {x} with a barely hidden grimace', 'washes {x} down quickly', 'leaves most of {x} untouched'],
-        userCues: ['a small involuntary grimace at {x}', 'someone notices and offers to swap the {x} for something else', 'the throat works hard to swallow {x}'],
+        userCues: ['someone offers to swap the {x} for something else'],
     },
     aversion: {
-        name: 'Отвращение к еде', kind: 'negative', icon: 'fa-ban', every: 3, timed: true,
+        name: 'Отвращение к еде', kind: 'negative', icon: 'fa-ban', every: 1, timed: true,
         text: 'От одной мысли о еде мутит',
         prompt: 'food aversion — the smell or sight of one food turns the stomach',
         cues: ['turns away from the smell of {x}', 'covers the nose near {x}', 'pales when {x} is mentioned', 'asks to take {x} away'],
-        userCues: ['sudden pallor at the smell of {x}', 'someone notices and moves {x} out of reach', 'a gag reflex at {x}, swallowed down'],
+        userCues: ['someone moves the {x} out of reach'],
     },
     sugar_crash: {
-        name: 'Сахарный спад', kind: 'negative', icon: 'fa-candy-cane', every: 3, timed: true,
+        name: 'Сахарный спад', kind: 'negative', icon: 'fa-candy-cane', every: 1, timed: true,
         text: 'После сладкого — вялость и снова тянет есть',
         prompt: 'sugar crash after sweets — sluggish, foggy, hungry again soon',
         cues: ['a heavy yawn after the sweets', 'loses the thread for a second', 'eyes drift back to the food'],
         userCues: ['eyelids suddenly heavy after the sweets', 'someone notices the slump', 'a slow, foggy blink'],
     },
     warmed: {
-        name: 'Согрелся', nameF: 'Согрелась', kind: 'positive', icon: 'fa-temperature-arrow-up', every: 3, timed: true,
+        name: 'Согрелся', nameF: 'Согрелась', kind: 'positive', icon: 'fa-temperature-arrow-up', every: 1, timed: true,
         text: 'Горячая еда согрела изнутри',
         prompt: 'warmed through by hot food or drink — loosened, comfortable',
         cues: ['cups the warm bowl with both hands', 'colour returns to the face', 'shoulders drop as the warmth spreads'],
         userCues: ['colour returns to their cheeks', 'fingers stop trembling around the warm cup', 'someone notices and pours more'],
     },
     heartburn: {
-        name: 'Изжога', kind: 'negative', icon: 'fa-fire', every: 3, timed: true,
+        name: 'Изжога', kind: 'negative', icon: 'fa-fire', every: 1, timed: true,
         text: 'Жжение за грудиной после еды',
         prompt: 'heartburn after eating — burning chest, uncomfortable lying down',
         cues: ['rubs the breastbone', 'sits up straighter', 'sips water to ease a burning'],
         userCues: ['a hand goes to the breastbone on its own', 'a sour burp', 'someone offers milk or water for the burning'],
-    },
-    baby_kicks: {
-        name: 'Малыш толкается', kind: 'positive', icon: 'fa-baby', every: 4, timed: true,
-        text: 'Малыш шевелится',
-        prompt: 'the baby is kicking',
-        cues: ['a hand goes to the belly', 'a surprised little laugh', 'pauses mid-sentence to feel a kick', 'guides someone\'s hand to feel it'],
-        userCues: ['the belly visibly shifts under a hand', 'a kick strong enough that someone nearby feels it', 'someone notices and reaches to feel the baby move'],
     },
 
     // ─── Положительные ───
