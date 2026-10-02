@@ -95,29 +95,31 @@ export const DISEASE_DB = {
         nameEn: 'Dehydration',
         category: 'physical',
         stages: {
+            // Обезвоживание — не «захотелось пить», а долгое время почти без воды:
+            // уровень воды низкий И держится так несколько часов (dryHours — часы при воде ≤ 20)
             mild: {
-                threshold: { water: 25 },
+                threshold: { water: 15, dryHours: 4 },
                 effects: ['Сухость во рту', 'Головная боль'],
                 effectsEn: ['Dry mouth', 'Headache'],
                 modifiers: { focus: -10, energy: -5 },
                 symptoms: 'Lips cracking, mild headache, dark urine, thirst.',
             },
             moderate: {
-                threshold: { water: 15 },
+                threshold: { water: 8, dryHours: 12 },
                 effects: ['Сильная головная боль', 'Слабость', 'Тахикардия'],
                 effectsEn: ['Severe headache', 'Weakness', 'Rapid heartbeat'],
                 modifiers: { focus: -20, energy: -20, physical: -15 },
                 symptoms: 'Pounding headache, heart racing, dizziness when standing, skin losing elasticity.',
             },
             severe: {
-                threshold: { water: 8 },
+                threshold: { water: 3, dryHours: 24 },
                 effects: ['Спутанность сознания', 'Обморок', 'Почечный стресс'],
                 effectsEn: ['Confusion', 'Fainting', 'Kidney stress'],
                 modifiers: { focus: -40, energy: -40, physical: -35 },
                 symptoms: 'Confused, stumbling, no sweat despite heat, kidneys aching, fainting spells.',
             },
             critical: {
-                threshold: { water: 3 },
+                threshold: { water: 0, dryHours: 48 },
                 effects: ['Отказ органов', 'Кома'],
                 effectsEn: ['Organ failure', 'Coma'],
                 modifiers: { focus: -70, energy: -70, physical: -60 },
@@ -668,6 +670,7 @@ function determineStageRaw(charData, diseaseDef) {
         if (t.hoursSinceLastMeal !== undefined && (charData.hoursSinceLastMeal || 0) < t.hoursSinceLastMeal) match = false;
         if (t.reserve !== undefined && (charData.reserve ?? 0) > t.reserve) match = false;
         if (t.water !== undefined && charData.water > t.water) match = false;
+        if (t.dryHours !== undefined && (charData.dryHours || 0) < t.dryHours) match = false;
         if (t.satiety !== undefined && charData.satiety > t.satiety) match = false;
 
         if (match) return stage;
@@ -866,7 +869,7 @@ function evaluateEffects(c, hours, added, removed) {
     // Эффекты от показателей снимаются сразу, как только показатель восстановился
     // (небольшой зазор между «включить» и «выключить» — чтобы не мигали)
     T('hunger', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 8, off: c.satiety > 26 });   // ~14 ч без еды: пропущен приём, а не просто утро
-    T('dehydration', { on: c.water <= 25, off: c.water > 30 });
+    T('dehydration', { on: c.water <= 30, off: c.water > 38 });   // просто хочется пить; болезнь — позже и не сразу
     T('irritability', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
         off: c.satiety > 30 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });
     T('overeating', { on: (c.recentIntake || 0) > g * 0.6, off: (c.recentIntake || 0) < g * 0.45 });

@@ -308,6 +308,9 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     }
 
     charData.hoursSinceLastMeal = (charData.hoursSinceLastMeal || 0) + hours;
+    // Часы почти без воды (для обезвоживания): копятся при воде ≤ 20, сбрасываются, когда напились
+    if (charData.water <= 20) charData.dryHours = (charData.dryHours || 0) + hours;
+    else if (charData.water > 30) charData.dryHours = 0;
     charData.satiety = Math.round(satietyFrom(charData, dailyGoal));
 
     // ─── Алкоголь, кофеин, электролиты, часы без сна ───
