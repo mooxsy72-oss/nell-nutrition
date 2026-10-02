@@ -295,13 +295,13 @@ export const DISEASE_DB = {
 
     // ─── Психика: последствия голода ───
     food_obsession: {
-        id: 'food_obsession', nameRu: 'Пищевая одержимость', nameEn: 'Food preoccupation', category: 'mental',
+        id: 'food_obsession', nameRu: 'Мысли о еде', nameEn: 'Food on the mind', category: 'mental',
         stages: {
-            mild: { effects: ['Мысли о еде', 'Рассеянность'], modifiers: { focus: -10 },
-                symptoms: 'Thoughts keep circling back to food; notices every smell, talks about meals.', cues: ['brings up food in an unrelated conversation', 'notices a bakery smell from far away', 'plans the next meal out loud'] },
-            moderate: { effects: ['Навязчивые мысли о еде', 'Трудно сосредоточиться'], modifiers: { focus: -25 },
-                symptoms: 'Food dominates thinking: daydreams about meals, fixates on others eating, hard to focus on anything else.', cues: ['watches someone eat with total focus', 'loses the thread when food is mentioned', 'counts crumbs on a plate'] },
-            severe: { effects: ['Одержимость едой', 'Эмоциональные срывы'], modifiers: { focus: -45 },
+            mild: { effects: ['Чаще думает о еде', 'Рассеянность'], modifiers: { focus: -10 },
+                symptoms: 'Long without proper food: thoughts drift to the next meal more often than usual.', cues: ['loses the thread for a moment', 'notices a smell of cooking'] },
+            moderate: { effects: ['Трудно думать о другом', 'Рассеянность'], modifiers: { focus: -25 },
+                symptoms: 'Days of not eating enough: hard to focus, thoughts keep returning to food.', cues: ['loses the thread when food is mentioned', 'distracted, asks to repeat'] },
+            severe: { effects: ['Почти все мысли — о еде', 'Эмоциональные срывы'], modifiers: { focus: -45 },
                 symptoms: 'Food is almost all the mind can hold; emotional outbursts, may take food without thinking.', cues: ['hands reach for food before thinking', 'tears up over a missed meal', 'hides a scrap in a pocket'] },
         },
         recovery: { mild: 12, moderate: 48, severe: 120 },
@@ -807,7 +807,7 @@ function evaluateExtraDiseases(c, hours, added, removed, progressed, recovering)
 
     // Пищевая одержимость
     customDisease(c, 'food_obsession',
-        (hslm >= 96 || days >= 10) ? 'severe' : (hslm >= 48 || days >= 5) ? 'moderate' : (hslm >= 20 || days >= 2) ? 'mild' : null,
+        (hslm >= 96 || days >= 10) ? 'severe' : (hslm >= 48 || days >= 5) ? 'moderate' : (hslm >= 26 || days >= 3) ? 'mild' : null,
         hslm < 8 && days === 0, ...args);
 
     // Голодная апатия
@@ -865,7 +865,7 @@ function evaluateEffects(c, hours, added, removed) {
 
     // Эффекты от показателей снимаются сразу, как только показатель восстановился
     // (небольшой зазор между «включить» и «выключить» — чтобы не мигали)
-    T('hunger', { on: c.satiety <= 27 && c.hoursSinceLastMeal >= 5, off: c.satiety > 32 });   // желудок пуст и прошло 8+ ч
+    T('hunger', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 8, off: c.satiety > 26 });   // ~14 ч без еды: пропущен приём, а не просто утро
     T('dehydration', { on: c.water <= 25, off: c.water > 30 });
     T('irritability', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
         off: c.satiety > 30 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });

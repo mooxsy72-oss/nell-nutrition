@@ -149,6 +149,7 @@ function defaultState() {
         lastGameTime: null,
         history: [],
         weightHistory: [],
+        weightMilestones: [],   // памятные даты веса: беременность, роды…
         snapshots: [],          // { beforeMsg, ... } — состояние ДО обработки ответа
         rpDate: null,           // дата/время из ролплея (тег date=)
         missedTag: 0,           // сколько ответов подряд пришло без тега (для «догоняющего» тега)
@@ -185,7 +186,7 @@ function loadState() {
         }
 
         state.snapshots = (state.snapshots || []).filter(s => s && s.beforeMsg !== undefined);
-        for (const k of ['history', 'weightHistory']) if (!Array.isArray(state[k])) state[k] = [];
+        for (const k of ['history', 'weightHistory', 'weightMilestones']) if (!Array.isArray(state[k])) state[k] = [];
         delete state.manualLog;   // вкладки «Покормить» больше нет
         fillChar(state.user);
         state.user.name = getUserName();
@@ -288,6 +289,7 @@ function takeSnapshot(beforeMsg) {
         rpDate: state.rpDate,
         missedTag: state.missedTag || 0,
         weightHistory: clone(state.weightHistory),
+        weightMilestones: clone(state.weightMilestones || []),
         history: clone(state.history),
     });
     if (state.snapshots.length > 30) state.snapshots = state.snapshots.slice(-30);
@@ -312,6 +314,7 @@ function restoreSnapshot(snap) {
     state.rpDate = snap.rpDate ?? null;
     state.missedTag = snap.missedTag || 0;
     state.weightHistory = clone(snap.weightHistory || []);
+    state.weightMilestones = clone(snap.weightMilestones || []);
     state.history = clone(snap.history || []);
 }
 
@@ -497,6 +500,15 @@ function pregWeekExact(c, clock = state.clockHours) {
     return Math.min(42, c.pregBase.week + Math.max(0, (clock - c.pregBase.clock) / 168));
 }
 
+// Памятная дата веса (в инфоблоке, вкладка «Вес»)
+function addMilestone(c, label) {
+    const who = c === state.user ? 'user' : 'bot';
+    state.weightMilestones = state.weightMilestones || [];
+    state.weightMilestones.push({ who, label, weight: +c.weight.toFixed(1),
+        day: Math.floor((state.clockHours ?? 0) / 24) + 1, date: state.rpDate || null });
+    if (state.weightMilestones.length > 40) state.weightMilestones = state.weightMilestones.slice(-40);
+}
+
 /**
  * Беременность из тега. Неделя может только расти: ИИ часто повторяет ту неделю,
  * что видел в промпте, — раньше это сбрасывало отсчёт, и срок «застревал».
@@ -506,12 +518,23 @@ function applyPregnancy(c, week) {
     if (c.gender === 'male' || week == null) return;
     if (week === 0) {
         // Роды: уходит большая часть «беременного» веса
-        if (c.pregnant) changeWeight(c, -(c.pregMassApplied || 0) * 0.65);
+        if (c.pregnant) {
+            const before = c.weight, wk = c.pregnancyWeek;
+            changeWeight(c, -(c.pregMassApplied || 0) * 0.65);
+            const pre = c.prePregWeight ?? before - (c.pregMassApplied || 0);
+            const born = wk >= 22;
+            addMilestone(c, born ? `Роды (${wk} нед.): за беременность ${kgDelta(before - pre)} кг, сразу после −${kg2(before - c.weight)}`
+                : `Беременность прервалась (${wk} нед.)`);
+            if (born) c.postpartum = { clock: state.clockHours, weight: c.weight, pre };
+        }
         c.pregnant = false; c.pregnancyWeek = 0; c.pregBase = null; c.pregMassApplied = 0;
     } else if (!c.pregnant) {
         // Вес на момент, когда стало известно, уже включает набранное к этой неделе
         c.pregGainFactor = pregGainFactor(c);
         c.pregMassApplied = pregMass(week, c.pregGainFactor);
+        c.prePregWeight = Math.round((c.weight - c.pregMassApplied) * 10) / 10;
+        c.postpartum = null;
+        addMilestone(c, `Беременность, ${week} нед.`);
         c.pregnant = true; c.pregnancyWeek = week; c.pregBase = { week, clock: state.clockHours };
     } else if (week > Math.floor(pregWeekExact(c))) {
         // История ушла вперёд сильнее наших часов — догоняем (и вес тоже)
@@ -544,7 +567,10 @@ function setPregWeekManual(c, week) {
     const apply = (x, clock) => {
         if (!x) return;
         if (!week) { x.pregnant = false; x.pregnancyWeek = 0; x.pregBase = null; x.pregMassApplied = 0; return; }
-        if (!x.pregnant) x.pregGainFactor = pregGainFactor(x);
+        if (!x.pregnant) {
+            x.pregGainFactor = pregGainFactor(x);
+            x.prePregWeight = Math.round((x.weight - pregMass(week, x.pregGainFactor)) * 10) / 10;
+        }
         x.pregnant = true;
         x.pregnancyWeek = week;
         x.pregBase = { week, clock };
@@ -745,6 +771,43 @@ function inferActivity(...texts) {
     return null;
 }
 
+// ─── «уже поел каши» в _why, а _ate пустое ───
+const WHY_ATE_RE = /(?:^|[\s,;(])(?:уже\s+|только что\s+|плотно\s+|сытно\s+)?(?:по|съ|на|при)?ел[аи]?(?=$|[\s,.;!)])|(?:позавтрака|пообеда|поужина|перекуси|отобеда|наел)[а-яё]*|(?:^|\s)ate\b|had (?:breakfast|lunch|dinner|supper|a meal)|already eaten/i;
+const WHY_NOT_RE = /(?:не|ещё не|еще не|ни разу не)\s+(?:по|съ|на)?ел|не\s+(?:завтрака|обеда|ужина|перекус)|hasn'?t eaten|didn'?t eat|not eaten|no food|пропуст/i;
+function foodFromWhy(why, c) {
+    const t = String(why || '').trim();
+    if (!t || !WHY_ATE_RE.test(t) || WHY_NOT_RE.test(t)) return null;
+    if ((c.hoursSinceLastMeal ?? 99) < 2) return null;   // уже учтено (распорядок или прошлый тег)
+    const m = t.match(WHY_ATE_RE);
+    let item = t.slice((m.index || 0) + m[0].length).split(/[,;.]/)[0].replace(/^\s*(уже|немного|чуть)\s+/i, '').trim();
+    if (!item || item.length > 40 || /^(до|досыта|плотно|сытно|вдоволь|—|-)/i.test(item)) item = 'еда';
+    const small = /(немного|чуть|перекус|кусоч|глот|snack|a bite)/i.test(t);
+    const big = /(до отвала|досыта|плотно|сытно|наел)/i.test(t);
+    const g = effectiveGoal(c);
+    const kcal = small ? 200 : big ? 700 : Math.max(300, Math.min(650, Math.round(g * 0.2 / 50) * 50));
+    return { item, calories: kcal, water: 0, implied: true, fromWhy: true };
+}
+
+// ─── Самочувствие не должно спорить с состоянием ───
+// «выспался» в эффектах и «недосып» в самочувствии — убираем противоречащее слово из самочувствия
+const FEEL_RULES = [
+    { re: /недосып|не\s*выспал|невыспан|сонлив|clouded sleep|sleep[- ]?deprived|didn'?t sleep/i,
+      bad: (c, ctx, slept) => hasEffect(c, 'rested') || slept >= 7 },
+    { re: /усталост|устал|вымотан|tired|exhausted/i,
+      bad: (c, ctx, slept) => (hasEffect(c, 'rested') || slept >= 7) && c.energy >= 60 },
+    { re: /выспал|бодр|rested|well[- ]slept/i, bad: (c) => hasEffect(c, 'sleep_deprived') },
+    { re: /голод|hungry|starving/i, bad: (c) => c.satiety >= 70 },
+    { re: /сытост|сыт[аоы]?(?=$|[\s,])|наел|full\b|sated/i, bad: (c) => c.satiety <= 25 },
+    { re: /жажд|пересохл|thirst/i, bad: (c) => c.water >= 75 },
+];
+function reconcileFeel(feel, c, ctx, sleeping, hours) {
+    const slept = sleeping ? hours : 0;
+    const parts = String(feel || '').split(/\s*,\s*/).filter(Boolean);
+    const kept = parts.filter(p => !FEEL_RULES.some(r => r.re.test(p) && r.bad(c, ctx, slept)));
+    if (kept.length !== parts.length) console.log('[NN] самочувствие поправлено:', feel, '→', kept.join(', '));
+    return kept.length ? kept.join(', ') : null;
+}
+
 // ─── Поле тега про другого персонажа? ───
 // Начинается с имени собственного (с большой буквы, и в ответе оно стоит с большой буквы
 // посреди предложения), которое не совпадает с именем чара или игрока
@@ -899,6 +962,13 @@ function processAiResponse(messageId) {
             if (kcal >= 100) foodsFor[ch.who] = [{ item: 'еда', calories: kcal, water: 0, implied: true }];
         }
     }
+    // Еда, упомянутая только в _why («уже поел каши») — модель забыла _ate
+    for (const ch of chars) {
+        if (foodsFor[ch.who].length) continue;
+        const why = ch.who === 'user' ? tag?.userWhy : tag?.botWhy;
+        const f = foodFromWhy(why, ch.data);
+        if (f) foodsFor[ch.who] = [f];
+    }
     userFood = foodsFor.user;
     botFood = foodsFor.bot;
 
@@ -947,8 +1017,8 @@ function processAiResponse(messageId) {
 
     // Самочувствие и калибровка по карточкам — из тега
     if (tag) {
-        if (tag.userFeel) state.user.feel = tag.userFeel;
-        if (bot && tag.botFeel) bot.feel = tag.botFeel;
+        if (tag.userFeel) state.user.feel = reconcileFeel(tag.userFeel, state.user, ctx.user, sleeping, hours);
+        if (bot && tag.botFeel) bot.feel = reconcileFeel(tag.botFeel, bot, ctx.bot, sleeping, hours);
         if (tag.userProfile) applyProfile(state.user, tag.userProfile);
         if (bot && tag.botProfile) applyProfile(bot, tag.botProfile);
         if (tag.userState) applyStateCalib(state.user, tag.userState);
@@ -1200,7 +1270,7 @@ function charPromptBlock(c, name, isUser) {
     if (fp.length) lines.push(`  Tastes (only when food is actually on the table): ${fp.join(' · ')}.`);
     if (c.weightNote) {
         const n = c.weightNote;
-        lines.push(`  Weight: ${n.delta > 0 ? '+' : ''}${n.delta} kg since last noted, now ${n.weight} kg${c.pregnant ? ' (pregnancy)' : ''}. Just a fact for continuity — let it show only as naturally as it would (how clothes sit, how they move); no teasing, no comments on the body unless the story itself calls for it.`);
+        lines.push(`  Weight: ${n.delta > 0 ? '+' : ''}${n.delta} kg, now ${n.weight} kg${c.pregnant ? ' (pregnancy)' : ''} — background fact, no comments on the body.`);
     }
     const effIds = [...c.debuffs, ...c.buffs].map(e => e.id);
     if (effIds.length) lines.push(`  Effect ids: ${effIds.join(', ')}`);
@@ -1282,8 +1352,8 @@ function tagFieldRules(userName, botName) {
         `• _activity, always both: low (sit, talk, eat, rest) | medium (walk, chores, cook, ride) | high (run, fight, haul, heavy work).`,
         `• _ate = everything eaten in ${userName}'s last message and your reply, each as a new portion — passing mentions too ("перекусили по дороге", "после ужина"), and a second meal right after the first. Earlier tags are already counted: never drop something because it looks like an earlier entry, but never re-log food eaten before — licking fingers, an aftertaste, a full belly or remembering the meal is not new eating. Same bite in both messages → once. FOOD (HOW):KCAL — HOW = how much and how, a few words ("всю миску", "пару ложек через силу"); KCAL = a quick round guess, no arithmetic (a taste or lick 10, bread slice 100, porridge 350, pie slice 350, soup with bread 450, stew 700, feast 1000+). Nothing eaten → omit; never "ничего"/0.`,
         `• _drank — same rule: DRINK (HOW):ML:KCAL (sip 30, cup 250, mug 350, pint 500); KCAL only if caloric; drinks never in _ate.`,
-        `• _full = fullness 0–100, only for someone who ate or drank. _why = for anyone who didn't eat, 3–8 words ("сыт после обеда", "ещё не ела — шьёт").`,
-        `• _feel = 3–8 words, body and mind. date = in-world date.`,
+        `• _full = fullness 0–100, only for someone who ate or drank. _why = for anyone who didn't eat, 3–8 words ("сыт после обеда", "ещё не ела — шьёт"); if they did eat, it goes in _ate, not _why.`,
+        `• _feel = 3–8 words, body and mind, consistent with the state above (a full night's sleep isn't "недосып"). date = in-world date.`,
         preg.length ? `• ${preg.join(' ')}` : null,
         `• Only if true: _vomited=true · _care=true (being treated) · _heal=ID:+N (+5…+15, −N on a setback) · _clear=EFFECT_ID (effect passed) · _weight=+2/-3/62 (story states it) · _likes/_dislikes/_habits=FOOD (new tastes; -FOOD to remove).`,
         isHard()
@@ -1794,42 +1864,37 @@ function overviewPane(snap, live) {
 }
 
 // ─── Вес ──────────────────────────────────────────────────────
+// Коротко: вес сейчас, ИМТ, итог беременности/после родов, памятные даты,
+// последние 3 дня по дням и дальше — по неделям (4 недели) и по месяцам.
 function weightPane() {
     const card = (c, who) => {
         if (!c) return '';
-        const entries = state.weightHistory.filter(e => e.who === who).slice(-5);
-        let trend = ['fa-equals', 'стабильно'];
-        if (entries.length >= 2) {
-            const diff = entries[entries.length - 1].weight - entries[0].weight;
-            if (diff > 0.1) trend = ['fa-arrow-trend-up', 'растёт'];
-            else if (diff < -0.1) trend = ['fa-arrow-trend-down', 'снижается'];
-        }
         const bmi = c.weight / ((c.height / 100) ** 2);
         let bmiLabel = 'норма', bl = 'good';
         if (bmi < 18.5) { bmiLabel = 'дефицит'; bl = 'warn'; }
         else if (bmi >= 30) { bmiLabel = 'ожирение'; bl = 'bad'; }
         else if (bmi >= 25) { bmiLabel = 'избыток'; bl = 'warn'; }
         const today = c.weight - (c.dayStartWeight ?? c.weight);
-        const prev = entries[entries.length - 1];
-        const ledger = c.fatLedger || 0;
-        // Баланс дня ещё не в весе: он спишется в полночь (потеря — только если день закончится голодным)
-        const pending = Math.abs(ledger) >= 0.02
-            ? `<div class="nn-kcal-meta">Баланс дня: ${kgDelta(ledger)} кг — учтётся в полночь${ledger < 0 ? ', если ляжет спать голодным' : ''}</div>` : '';
+        const notes = [];
+        if (c.pregnant && c.prePregWeight) notes.push(`за беременность ${kgDelta(c.weight - c.prePregWeight)} кг`);
+        else if (c.postpartum && (state.clockHours ?? 0) - (c.postpartum.clock ?? 0) < 24 * 365) {
+            const lost = c.postpartum.weight - c.weight;
+            const left = c.weight - c.postpartum.pre;
+            notes.push(`после родов ${kgDelta(-lost)} кг${Math.abs(left) >= 0.3 ? `, до беременности ${kgDelta(left)}` : ', вес до беременности'}`);
+        }
+        const mine = (state.weightMilestones || []).filter(m => m.who === who).slice(-4).reverse();
+        const ms = mine.length ? `<div class="nn-kcal-meta">${mine.map(m =>
+            `<div><i class="fa-solid fa-bookmark"></i> ${esc(m.date || `день ${m.day}`)} — ${esc(m.label)} (${kg2(m.weight)})</div>`).join('')}</div>` : '';
         return `<section class="nn-card">
-            <header class="nn-card-head nn-card-head-static">${avatarHtml(who, 'nn-av-lg')}<div class="nn-card-id"><div class="nn-card-name">${esc(who === 'user' ? getUserName() : c.name)}</div></div>
-                <span class="nn-status"><i class="fa-solid ${trend[0]}"></i><span>${trend[1]}</span></span></header>
-            <div class="nn-kcal-num"><b>${kg2(c.weight)}</b><span>кг, сегодня ${kgDelta(today)}${prev ? ` · прошлый день ${kgDelta(prev.change)}` : ''}</span></div>
-            ${pending}
-            <div class="nn-kcal-meta">ИМТ ${bmi.toFixed(1)} — <span class="nn-${bl}-text">${bmiLabel}</span></div>
+            <header class="nn-card-head nn-card-head-static">${avatarHtml(who, 'nn-av-lg')}<div class="nn-card-id"><div class="nn-card-name">${esc(who === 'user' ? getUserName() : c.name)}</div></div></header>
+            <div class="nn-kcal-num"><b>${kg2(c.weight)}</b><span>кг · сегодня ${kgDelta(today)} · ИМТ ${bmi.toFixed(1)} <span class="nn-${bl}-text">${bmiLabel}</span></span></div>
+            ${notes.length ? `<div class="nn-kcal-meta">${notes.join(' · ')}</div>` : ''}
+            ${ms}
         </section>`;
     };
     return `<div class="nn-cards">${card(state.user, 'user')}${card(getBotState(), 'bot')}</div>${weightTable()}`;
 }
 
-/**
- * История веса компактно: одна строка на день (оба персонажа рядом), последние 7 дней;
- * всё раньше — по неделям, итогом за неделю.
- */
 function weightTable() {
     const H = state.weightHistory;
     if (!H.length) return '';
@@ -1841,23 +1906,24 @@ function weightTable() {
         byDay.get(e.day)[e.who] = e;
     }
     const days = [...byDay.keys()].sort((a, b2) => b2 - a);
-    const delta = (x) => (Math.abs(x) < 0.005 ? '<span class="nn-mute">±0</span>'
+    const delta = (x) => (Math.abs(x) < 0.05 ? '<span class="nn-mute">±0</span>'
         : `<span class="${x > 0 ? 'nn-warn-text' : 'nn-good-text'}">${kgDelta(x)}</span>`);
     const cell = (e) => (e ? `<span title="${esc(`${e.reason || ''} · ${e.calories} / −${e.burned ?? '?'} ккал`)}">${kg2(e.weight)} ${delta(e.change)}</span>` : '<span class="nn-mute">—</span>');
-    const recent = days.slice(0, 7).map(d => `<tr><td>${d}</td>${whos.map(w => `<td>${cell(byDay.get(d)[w])}</td>`).join('')}</tr>`).join('');
-    // Старше недели — неделями: вес на конец недели и сумма изменений
-    const weeks = new Map();
-    for (const d of days.slice(7)) {
-        const wk = Math.floor((d - 1) / 7);
-        if (!weeks.has(wk)) weeks.set(wk, []);
-        weeks.get(wk).push(byDay.get(d));
+    const recent = days.slice(0, 3).map(d => `<tr><td>${d}</td>${whos.map(w => `<td>${cell(byDay.get(d)[w])}</td>`).join('')}</tr>`).join('');
+    // Дальше — группами: 4 недели по неделе, потом по 30 дней
+    const groups = new Map();
+    const newest = days[0];
+    for (const d of days.slice(3)) {
+        const back = newest - d;
+        const key = back < 31 ? `w${Math.floor((d - 1) / 7)}` : `m${Math.floor((d - 1) / 30)}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(byDay.get(d));
     }
-    const old = [...weeks.entries()].map(([wk, list]) => {
+    const old = [...groups.values()].map(list => {
         const cells = whos.map(w => {
             const es = list.map(x => x[w]).filter(Boolean);
             if (!es.length) return '<td><span class="nn-mute">—</span></td>';
-            const last = es[0];   // список дней по убыванию — первый и есть конец недели
-            return `<td>${kg2(last.weight)} ${delta(es.reduce((a, e) => a + (e.change || 0), 0))}</td>`;
+            return `<td>${kg2(es[0].weight)} ${delta(es.reduce((a, e) => a + (e.change || 0), 0))}</td>`;
         }).join('');
         const ds = list.map(x => (x.user || x.bot).day);
         return `<tr class="nn-week-row"><td>${Math.min(...ds)}–${Math.max(...ds)}</td>${cells}</tr>`;
@@ -2115,7 +2181,7 @@ const DEBUG_OPTIONS = [
     ['disease:gastritis:mild', 'Болезнь: гастрит'],
     ['disease:anemia:mild', 'Болезнь: анемия'],
     ['disease:scurvy:mild', 'Болезнь: цинга'],
-    ['disease:food_obsession:moderate', 'Психика: пищевая одержимость'],
+    ['disease:food_obsession:moderate', 'Психика: мысли о еде'],
     ['disease:hunger_apathy:mild', 'Психика: голодная апатия'],
     ['disease:food_insecurity:mild', 'Психика: пищевая тревожность'],
     ['stat:hunger', 'Состояние: голодный'],

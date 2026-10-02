@@ -208,7 +208,7 @@ export const EFFECT_INFO = {
         prompt: 'well fed — steady strength and endurance',
     },
     hydrated: {
-        name: 'Гидратация', kind: 'positive', icon: 'fa-droplet', timed: true,
+        name: 'Жажда утолена', kind: 'positive', icon: 'fa-droplet', timed: true,
         text: 'Напился вдоволь: вода расходуется медленнее',
         textF: 'Напилась вдоволь: вода расходуется медленнее',
         prompt: 'well hydrated — clear-headed, good stamina',
