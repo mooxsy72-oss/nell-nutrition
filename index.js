@@ -37,6 +37,7 @@ const LS = {
     expand: 'nellNutrition_expandLast',    // раскрывать блок последнего ответа
     mode: 'nellNutrition_mode',            // 'easy' — пропуски дней без голодной смерти, 'hard' — выживание
     era: 'nellNutrition_era',              // 'modern' | 'historical' — без современной медицины
+    position: 'nellNutrition_position',    // 'bottom' | 'top' | 'middle' — где инфоблок в сообщении
 };
 const lsGet = (k, d) => { const v = localStorage.getItem(k); return v === null ? d : v; };
 const isEnabled = () => lsGet(LS.enabled, 'true') !== 'false';
@@ -44,6 +45,7 @@ const scopeAll = () => lsGet(LS.scope, 'all') === 'all';
 const expandLast = () => lsGet(LS.expand, 'false') === 'true';
 const isHard = () => lsGet(LS.mode, 'easy') === 'hard';
 const isHistorical = () => lsGet(LS.era, 'modern') === 'historical';
+const blockPos = () => { const v = lsGet(LS.position, 'bottom'); return ['top', 'middle'].includes(v) ? v : 'bottom'; };
 
 // Названия и иконки состояний берутся из баз болезней и эффектов
 const SEV_LABEL = { mild: 'лёгкая', moderate: 'средняя', severe: 'тяжёлая', critical: 'критическая' };
@@ -1557,15 +1559,16 @@ function renderBlock(id) {
     const snap = state && msg && !msg.is_user && !msg.is_system ? (live ? liveSnap() : msg.extra?.nn) : null;
     const show = isEnabled() && snap && snap.user && (scopeAll() || live);
 
-    if (!show) { block?.remove(); return; }
-    if (!block) {
-        const anchor = el.querySelector('.mes_text');
-        if (!anchor) return;
+    if (!show) { el.querySelectorAll('.nn-ib').forEach(b => b.remove()); return; }
+    // Дубликаты (другое расширение скопировало разметку) — оставляем один
+    el.querySelectorAll('.nn-ib').forEach((b, i) => { if (i > 0 || b !== block) b.remove(); });
+    if (!block || !el.contains(block)) {
+        if (!el.querySelector('.mes_text')) return;
         block = document.createElement('div');
         block.className = 'nn-ib';
-        anchor.insertAdjacentElement('afterend', block);
         bindBlock(block);
     }
+    if (!placeBlock(el, block, id)) return;
     block.dataset.mesid = String(id);
     const open = ui.open.has(id) ? ui.open.get(id) : (live && expandLast());
     block.classList.toggle('nn-open', open);
@@ -1575,6 +1578,76 @@ function renderBlock(id) {
     if (!live && TABS.find(t => t.id === tab)?.live) tab = 'overview';
 
     block.innerHTML = headHtml(snap, open) + (open ? bodyHtml(snap, live, tab) : '');
+}
+
+// ─── Где стоит инфоблок: под текстом, над ним или посередине ───
+// Под и над — блок стоит рядом с .mes_text, а не внутри: перерисовка текста
+// (правка, регэкспы, другие расширения) его не трогает. Посередине — блок внутри
+// .mes_text между абзацами: любая перерисовка текста его выкидывает, поэтому за
+// сообщениями следит наблюдатель (observeChat) и возвращает блок на место.
+// Пока сообщение редактируется или ещё печатается — блок временно под текстом.
+const healCount = new Map();   // mesid → [время перестановок] — защита от «перетягивания» с другим расширением
+
+function middleAnchor(text) {
+    const kids = [...text.children].filter(n => !n.classList.contains('nn-ib') && !/^(STYLE|SCRIPT|TEMPLATE)$/.test(n.tagName));
+    const blocks = kids.filter(n => n.tagName !== 'BR');
+    if (blocks.length >= 2) return { before: blocks[Math.floor(blocks.length / 2)] };
+    // Текст без абзацев, через <br>: встаём после среднего переноса
+    const brs = kids.filter(n => n.tagName === 'BR');
+    if (brs.length >= 2) return { after: brs[Math.floor(brs.length / 2)] };
+    return null;
+}
+
+function resolvePos(el, id, text) {
+    let pos = blockPos();
+    if (pos !== 'middle') return pos;
+    if (el.dataset.nnNoMiddle === '1') return 'bottom';
+    if (text.querySelector('textarea') || el.classList.contains('editing')) return 'bottom';   // правка
+    if (generating && id === chat.length - 1) return 'bottom';                                   // ещё печатается
+    return middleAnchor(text) ? 'middle' : 'bottom';                                             // один абзац
+}
+
+function isPlaced(block, text, pos) {
+    if (pos === 'middle') return block.parentElement === text;
+    if (block.parentElement !== text.parentElement) return false;
+    const rel = text.compareDocumentPosition(block);
+    return pos === 'top' ? !!(rel & Node.DOCUMENT_POSITION_PRECEDING) : !!(rel & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+function placeBlock(el, block, id) {
+    const text = el.querySelector('.mes_text');
+    if (!text) return false;
+    const pos = resolvePos(el, id, text);
+    block.classList.toggle('nn-pos-top', pos === 'top');
+    block.classList.toggle('nn-pos-middle', pos === 'middle');
+    if (isPlaced(block, text, pos)) return true;
+    if (pos === 'top') text.insertAdjacentElement('beforebegin', block);
+    else if (pos === 'middle') {
+        const a = middleAnchor(text);
+        if (a.before) a.before.insertAdjacentElement('beforebegin', block);
+        else a.after.insertAdjacentElement('afterend', block);
+    } else text.insertAdjacentElement('afterend', block);
+    return true;
+}
+
+// Вернуть блок на место после чужих изменений сообщения
+function healBlock(id) {
+    const el = getMesEl(id);
+    if (!el || !isEnabled()) return;
+    const block = el.querySelector('.nn-ib');
+    if (!block) { renderBlock(id); return; }
+    const text = el.querySelector('.mes_text');
+    if (!text || isPlaced(block, text, resolvePos(el, id, text))) return;
+    // Больше 6 перестановок за 3 секунды — кто-то упорно вычищает текст: в этом сообщении ставим под текстом
+    const now = Date.now();
+    const list = (healCount.get(id) || []).filter(t => now - t < 3000);
+    list.push(now);
+    healCount.set(id, list);
+    if (list.length > 6 && blockPos() === 'middle') {
+        el.dataset.nnNoMiddle = '1';
+        console.warn('[NN] инфоблок в сообщении', id, 'постоянно выкидывают из текста — ставлю под текстом');
+    }
+    placeBlock(el, block, id);
 }
 
 // ─── Хелперы ──────────────────────────────────────────────────
@@ -2286,6 +2359,13 @@ function injectSettingsPanel() {
                         <option value="last" ${scopeAll() ? '' : 'selected'}>только под последним</option>
                     </select>
                 </label>
+                <label class="nn-settings-row">Место в сообщении
+                    <select id="nn-set-position" class="text_pole">
+                        <option value="bottom" ${blockPos() === 'bottom' ? 'selected' : ''}>под текстом</option>
+                        <option value="top" ${blockPos() === 'top' ? 'selected' : ''}>над текстом</option>
+                        <option value="middle" ${blockPos() === 'middle' ? 'selected' : ''}>посередине текста</option>
+                    </select>
+                </label>
                 <p class="nn-hint">В старых ответах блок показывает состояние на тот момент. В последнем доступны вкладки «Вес» и «Параметры». Еду и питьё расширение считает само по ролплею.</p>
 
                 <hr class="sysHR">
@@ -2312,6 +2392,12 @@ function injectSettingsPanel() {
             setHungerCap(!isHard());
             setEffectsMode(isHard());
             injectPrompt();
+        });
+        document.getElementById('nn-set-position')?.addEventListener('change', e => {
+            localStorage.setItem(LS.position, e.target.value);
+            document.querySelectorAll('#chat .mes[data-nn-no-middle]').forEach(m => delete m.dataset.nnNoMiddle);
+            healCount.clear();
+            renderAllBlocks();
         });
         document.getElementById('nn-set-era')?.addEventListener('change', e => {
             localStorage.setItem(LS.era, e.target.value);
@@ -2359,7 +2445,10 @@ function onGenerationStarted(type, params, dryRun) {
     calibrateNow = !!state.calibrate?.pending || (regen && state.calibrate?.doneAt === lastBotIndex());
     injectPrompt();
 }
-function onGenerationEnded() { generating = false; }
+function onGenerationEnded() {
+    generating = false;
+    if (blockPos() === 'middle') setTimeout(renderLiveBlock, 120);
+}
 
 function onMessageReceived(id) {
     if (!isEnabled()) return;
@@ -2405,21 +2494,37 @@ function onChatChanged() {
 // Таверна дорисовывает сообщения позже событий смены чата и не присылает
 // «сообщение отрисовано» при загрузке — поэтому следим за самим #chat.
 let chatObserver = null;
+const healIds = new Set();
+let healTimer = null;
 function observeChat() {
     const target = document.getElementById('chat');
     if (!target) { setTimeout(observeChat, 500); return; }
     if (chatObserver) return;
+    const isOurs = (n) => n.nodeType === 1 && n.classList?.contains('nn-ib');
     chatObserver = new MutationObserver((muts) => {
+        let all = false;
         for (const m of muts) {
+            const t = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+            if (!t || t.closest?.('.nn-ib')) continue;   // изменения внутри самого инфоблока
+            const nodes = [...m.addedNodes, ...m.removedNodes];
+            if (nodes.length && nodes.every(isOurs)) continue;   // это мы переставили блок
             for (const n of m.addedNodes) {
-                if (n.nodeType === 1 && (n.classList?.contains('mes') || n.querySelector?.('.mes'))) {
-                    scheduleRenderAll();
-                    return;
-                }
+                if (n.nodeType === 1 && (n.classList?.contains('mes') || n.querySelector?.('.mes'))) all = true;
             }
+            const mes = t.closest?.('.mes[mesid]');
+            if (mes) healIds.add(Number(mes.getAttribute('mesid')));
+        }
+        if (all) scheduleRenderAll();
+        if (healIds.size) {
+            clearTimeout(healTimer);
+            healTimer = setTimeout(() => {
+                const ids = [...healIds];
+                healIds.clear();
+                ids.forEach(healBlock);
+            }, 80);
         }
     });
-    chatObserver.observe(target, { childList: true });
+    chatObserver.observe(target, { childList: true, subtree: true });
 }
 
 function on(evt, fn) {

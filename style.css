@@ -613,3 +613,17 @@
 .nn-act-line { display: flex; gap: 6px; align-items: baseline; }
 .nn-act-line > i { flex: none; opacity: 0.8; }
 .nn-ib .nn-hint { font-size: 0.85em; margin: 6px 2px 0; }
+
+/* ─── Место инфоблока в сообщении ─── */
+.nn-ib.nn-pos-top { margin: 2px 0 10px; }
+/* Посередине блок стоит внутри текста сообщения — отменяем стили текста (курсив, отступы, переносы) */
+.mes_text > .nn-ib.nn-pos-middle {
+    margin: 0.8em 0;
+    white-space: normal;
+    font-style: normal;
+    font-weight: normal;
+    text-indent: 0;
+    text-align: left;
+    line-height: normal;
+}
+.mes_text > .nn-ib.nn-pos-middle p { margin: 0; }
