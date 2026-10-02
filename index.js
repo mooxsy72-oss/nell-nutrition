@@ -11,7 +11,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 
 import {
     tickTime, applyMeal, applyDrink, applyVomit, goalOf, changeWeight, bankFat, KCAL_PER_KG,
-    burnPerHour,
+    burnPerHour, setSatiety, gutFor,
 } from './nutrition-engine.js';
 import { parseNnTag, parseNnInner, findNnInner, MAX_HOURS } from './parser.js';
 import {
@@ -22,7 +22,7 @@ import {
     pregnancyEvents, capHungerSeverity, setHungerCap, illnessEvents, setEra,
     foodEvents, cravingEvents, buildBeats,
 } from './conditions.js';
-import { EFFECT_INFO, effectView, drinkExtras, grantEffect, resolveEffectId, hasEffect } from './effects.js';
+import { EFFECT_INFO, effectView, drinkExtras, grantEffect, resolveEffectId, hasEffect, setEffectsMode } from './effects.js';
 import { ACTIVITY_LEVELS, BUILD_TYPES, calculateCalorieGoal } from './analyzer.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -358,6 +358,7 @@ const isNight = (h) => h >= 23 || h < 7;
 function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: true, bot: true }, declaredSkip = false, loggedMeal = { user: false, bot: false }) {
     const chars = activeChars();
     setHungerCap(!isHard());
+    setEffectsMode(isHard());
     setEra(isHistorical() ? 'historical' : 'modern');
     if (state.clockHours == null) state.clockHours = 12;
     // Пропуск от 6 часов проживается по распорядку, шагами по часу
@@ -404,8 +405,6 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                     if (skipLast[ch.who] && lastMealAt != null && Math.abs(at - lastMealAt) < 1e-6) continue;
                     applyMeal(c, dayTarget * share, 8, g);
                     markMeal(c, dayTarget * share, at);
-                    // Обычная трапеза за кадром наедает досыта — иначе к ночи все «голодные»
-                    c.satiety = Math.max(c.satiety, 75);
                     // Обычный обед по распорядку — не обжорство
                     c.recentIntake = Math.min(c.recentIntake || 0, g * 0.4);
                     c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
@@ -892,10 +891,12 @@ function processAiResponse(messageId) {
         if (full == null) continue;
         const c = ch.data;
         if (foodsFor[ch.who].length || drankFor[ch.who].length) { fullOf[ch.who] = full; continue; }
-        if (full >= c.satiety + 20) {
+        // Еды в теге нет, но сытость резко выросла — значит, поели, а блюдо не названо
+        if (full >= c.satiety + 30) {
             fullOf[ch.who] = full;
-            const kcal = Math.round(Math.min(effectiveGoal(c) * 0.6, (full - c.satiety) / 130 * effectiveGoal(c)));
-            foodsFor[ch.who] = [{ item: 'еда', calories: kcal, water: 0, implied: true }];
+            const g = effectiveGoal(c);
+            const kcal = Math.round(Math.min(g * 0.4, Math.max(0, gutFor(c, full, g) - (c.gut || 0))));
+            if (kcal >= 100) foodsFor[ch.who] = [{ item: 'еда', calories: kcal, water: 0, implied: true }];
         }
     }
     userFood = foodsFor.user;
@@ -904,15 +905,17 @@ function processAiResponse(messageId) {
     const mealKcal = { user: consume(byWho.user, userFood, userDrink, ctx), bot: 0 };
     if (byWho.bot) mealKcal.bot = consume(byWho.bot, botFood, botDrink, ctx);
 
-    // ИИ видит сцену лучше формулы («до отвала» — это до отвала), но в разумных пределах:
-    // не дальше 25 пунктов от расчёта, и тот, кто наелся за день и недавно ел, не может быть голодным
+    // Сытость теперь считается по желудку и сама по себе реалистична. Оценку ИИ берём как поправку:
+    // вниз до 20 пунктов, вверх до 10 — и только если съедено хоть что-то заметное
+    // (иначе «несколько глотков:15 | full=100» делали персонажа сытым).
     for (const ch of chars) {
         let full = fullOf[ch.who];
         if (full == null) continue;
         const c = ch.data, calc = c.satiety;
-        full = Math.max(calc - 25, Math.min(calc + 25, full));
-        if (c.calories >= effectiveGoal(c) * 0.9 && (c.hoursSinceLastMeal || 0) < 4) full = Math.max(full, 55);
-        c.satiety = Math.max(0, Math.min(100, full));
+        const real = mealKcal[ch.who] >= 100;
+        full = Math.max(calc - 20, Math.min(real ? calc + 10 : calc, full));
+        if (c.calories >= effectiveGoal(c) * 0.9 && (c.hoursSinceLastMeal || 0) < 3) full = Math.max(full, 55);
+        if (Math.abs(full - calc) >= 1) setSatiety(c, full, effectiveGoal(c));
     }
     // Вес изменился в истории («поправилась знатно», «похудел на 3 кг»)
     const wOf = { user: tag?.userWeight, bot: bot ? tag?.botWeight : null };
@@ -1112,9 +1115,9 @@ function applyStateCalib(c, st) {
     const h = hourOf(state.clockHours ?? 12);
     for (const s of MEAL_SLOTS) if (h >= s.to) mealsOf(c).done[s.id] = true;
     if (st.satiety != null) {
-        c.satiety = st.satiety;
         c.reserve = Math.round(g * (0.25 + 0.5 * st.satiety / 100));
-        c.hoursSinceLastMeal = st.satiety >= 85 ? 0.5 : st.satiety >= 60 ? 2.5 : st.satiety >= 35 ? 5 : st.satiety >= 15 ? 8 : 14;
+        c.hoursSinceLastMeal = st.satiety >= 85 ? 0.5 : st.satiety >= 60 ? 2.5 : st.satiety >= 35 ? 4.5 : st.satiety >= 15 ? 9 : 16;
+        setSatiety(c, st.satiety, g);
     }
     if (st.water != null) c.water = st.water;
     if (st.energy != null) c.energy = st.energy;
@@ -1194,7 +1197,7 @@ function charPromptBlock(c, name, isUser) {
         f.dislikes?.length ? `dislikes ${f.dislikes.join(', ')}` : '',
         f.habits?.length ? `habits: ${f.habits.join('; ')}` : '',
     ].filter(Boolean);
-    if (fp.length) lines.push(`  Food: ${fp.join(' · ')}.`);
+    if (fp.length) lines.push(`  Tastes (only when food is actually on the table): ${fp.join(' · ')}.`);
     if (c.weightNote) {
         const n = c.weightNote;
         lines.push(`  Weight: ${n.delta > 0 ? '+' : ''}${n.delta} kg since last noted, now ${n.weight} kg${c.pregnant ? ' (pregnancy)' : ''}. Just a fact for continuity — let it show only as naturally as it would (how clothes sit, how they move); no teasing, no comments on the body unless the story itself calls for it.`);
@@ -1248,6 +1251,7 @@ function buildStatePrompt() {
     const botName = getBotName();
     const rules = [];
     rules.push(`These states are quiet background, not the plot: they colour pace, mood and choices without being named. Most replies don't mention them at all; the story and the characters' goals come first. Keep it ordinary and human — no growling, snarling, devouring, possessiveness or animal behaviour around food. ${botName} handles ${b ? (b.gender === 'female' ? 'her' : b.gender === 'male' ? 'his' : 'their') : 'their'} own needs unprompted (drinks when thirsty, eats at mealtimes, rests when drained). Weakness limits what bodies can do.`);
+    rules.push(`In intense or emotional moments — birth, illness, danger, grief, a fight, intimacy — food, tastes and these states stay out of the reply entirely unless they are the point.`);
     rules.push(`${userName} is the player's character: never write their words, thoughts, feelings or actions. Their state shows only rarely, as a brief visible sign.`);
     if ([u, b].some(c => c && c.diseases.some(d => DISEASE_DB[d.id]?.category === 'mental'))) {
         rules.push('Mental states show through behaviour and dialogue, never as a narrated diagnosis.');
@@ -1276,7 +1280,7 @@ function tagFieldRules(userName, botName) {
     return [
         `• tp = in-world hours since your last reply (talk 0.1, a meal 0.5, a night 8); time = clock now. sleeping=true if they slept through most of that span — also on the reply where they wake. A jump ("a week later", *skip*) → skip=DURATION; off-screen meals and sleep are automatic.`,
         `• _activity, always both: low (sit, talk, eat, rest) | medium (walk, chores, cook, ride) | high (run, fight, haul, heavy work).`,
-        `• _ate = everything eaten in ${userName}'s last message and your reply, each as a new portion — passing mentions too ("перекусили по дороге", "после ужина"), and a second meal right after the first. Earlier tags are already counted: never drop something because it looks like an earlier entry. Same bite in both messages → once. FOOD (HOW):KCAL — HOW = how much and how, a few words ("всю миску", "пару ложек через силу"); KCAL = a quick round guess, no arithmetic (bread slice 100, porridge 350, pie slice 350, soup with bread 450, stew 700, feast 1000+). Nothing eaten → omit; never "ничего"/0.`,
+        `• _ate = everything eaten in ${userName}'s last message and your reply, each as a new portion — passing mentions too ("перекусили по дороге", "после ужина"), and a second meal right after the first. Earlier tags are already counted: never drop something because it looks like an earlier entry, but never re-log food eaten before — licking fingers, an aftertaste, a full belly or remembering the meal is not new eating. Same bite in both messages → once. FOOD (HOW):KCAL — HOW = how much and how, a few words ("всю миску", "пару ложек через силу"); KCAL = a quick round guess, no arithmetic (a taste or lick 10, bread slice 100, porridge 350, pie slice 350, soup with bread 450, stew 700, feast 1000+). Nothing eaten → omit; never "ничего"/0.`,
         `• _drank — same rule: DRINK (HOW):ML:KCAL (sip 30, cup 250, mug 350, pint 500); KCAL only if caloric; drinks never in _ate.`,
         `• _full = fullness 0–100, only for someone who ate or drank. _why = for anyone who didn't eat, 3–8 words ("сыт после обеда", "ещё не ела — шьёт").`,
         `• _feel = 3–8 words, body and mind. date = in-world date.`,
@@ -2172,6 +2176,7 @@ function debugApply(code, who) {
         Object.assign(data, DEBUG_STATS[id] || {});
         if (id === 'perfect') data.reserve = g * 0.8;
     }
+    setSatiety(data, data.satiety, g);   // желудок под выставленную сытость
     evaluateConditions(data, 0);
     updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true, isUser: who === 'user', clock: state.clockHours });
     saveState();
@@ -2239,6 +2244,7 @@ function injectSettingsPanel() {
         document.getElementById('nn-set-mode')?.addEventListener('change', e => {
             localStorage.setItem(LS.mode, e.target.value);
             setHungerCap(!isHard());
+            setEffectsMode(isHard());
             injectPrompt();
         });
         document.getElementById('nn-set-era')?.addEventListener('change', e => {
@@ -2357,6 +2363,7 @@ function on(evt, fn) {
 function init() {
     console.log('[Nutrition Framework] init v3 — инфоблок');
     setHungerCap(!isHard());
+    setEffectsMode(isHard());
     setEra(isHistorical() ? 'historical' : 'modern');
     injectSettingsPanel();
     loadState();

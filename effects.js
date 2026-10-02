@@ -157,17 +157,17 @@ export const EFFECT_INFO = {
     },
     // ─── Пищевой профиль: любимое, нелюбимое, отвращение ───
     favorite_food: {
-        name: 'Любимая еда', kind: 'positive', icon: 'fa-face-smile-beam', every: 1, timed: true,
+        name: 'Любимая еда', kind: 'positive', icon: 'fa-face-smile-beam', timed: true,
         text: 'Ел любимое — настроение теплее, еда в радость',
         textF: 'Ела любимое — настроение теплее, еда в радость',
-        prompt: 'just had a favourite food — savouring it, warmer mood',
+        prompt: 'enjoyed the meal — slightly better mood',
         cues: ['mood visibly softens over {x}', 'compliments the {x}'],
         userCues: ['someone notices they enjoy the {x}'],
     },
     disliked_food: {
-        name: 'Невкусно', kind: 'negative', icon: 'fa-face-grimace', every: 1, timed: true,
+        name: 'Невкусно', kind: 'negative', icon: 'fa-face-grimace', timed: true,
         text: 'Пришлось есть нелюбимое — через силу',
-        prompt: 'had to eat something they dislike — forcing it down',
+        prompt: 'didn\'t enjoy the meal much',
         cues: ['pushes {x} around the plate', 'chews {x} with a barely hidden grimace', 'washes {x} down quickly', 'leaves most of {x} untouched'],
         userCues: ['someone offers to swap the {x} for something else'],
     },
@@ -219,6 +219,14 @@ export const EFFECT_INFO = {
         prompt: 'energetic — quick and alert',
     },
 };
+
+// ─── Режим: эффекты, которые работают только в хардкоре ───
+// Сейчас список пуст — в обоих режимах работают все эффекты (голод, жажда, усталость,
+// беременность и т.д.). Чтобы убрать что-то из лёгкого режима, впишите id сюда.
+let effectsFull = true;
+const HARD_ONLY_EFFECTS = new Set([]);
+export function setEffectsMode(hard) { effectsFull = !!hard; }
+export const effectAllowed = (id) => effectsFull || !HARD_ONLY_EFFECTS.has(id);
 
 /** Эффект по тому, как его назвал ИИ: id, русское название или первые слова описания */
 export function resolveEffectId(name) {
@@ -281,6 +289,10 @@ function removeEffect(c, id) {
 export function toggleEffect(c, id, { on, off, linger = 0 }, hours, added, removed) {
     off = !!off;
     const ex = findEffect(c, id);
+    if (!effectAllowed(id)) {
+        if (ex) { removeEffect(c, id); removed.push(id); }
+        return;
+    }
     if (on) {
         if (!ex) {
             listFor(c, id).push({ id, fading: false, fadeLeft: 0, idle: 0 });
@@ -312,6 +324,7 @@ export function toggleEffect(c, id, { on, off, linger = 0 }, hours, added, remov
 
 /** Эффект на время (выспался, похмелье, стыд) — таймер обновляется */
 export function grantEffect(c, id, hoursLeft, added = [], detail = null) {
+    if (!effectAllowed(id)) return;
     const ex = findEffect(c, id);
     if (ex) {
         ex.fading = true;

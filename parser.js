@@ -141,6 +141,8 @@ function parseFoodEntry(entry) {
     const estimated = kcal == null;
     // Без числа порцию задаёт манера: «пару кусочков» — мало, «жадно» — много
     if (kcal == null) kcal = DEFAULT_MEAL_KCAL * (manner?.kcalMult ?? 1);
+    // «пару ложек», «облизнул», «попробовал» — это крохи, даже если ИИ поставил большое число
+    if (manner?.id === 'bites' || /(облиз|слиз|lick)/i.test(rawName)) kcal = Math.min(kcal, 120);
     return {
         item: name || 'еда',
         manner: manner?.id || null,

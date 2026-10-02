@@ -18,7 +18,40 @@ export const BASE_WATER_LOSS_PER_HOUR = 3;
 export const BASE_ENERGY_LOSS_PER_HOUR = 2;
 
 // Сытость падает ~6% в час
-export const BASE_SATIETY_LOSS_PER_HOUR = 6;
+export const BASE_SATIETY_LOSS_PER_HOUR = 6;   // больше не используется: сытость считается по желудку (см. ниже)
+
+// ═══════════════════════════════════════════════════════════════
+// СЫТОСТЬ = ЖЕЛУДОК, А НЕ ДНЕВНАЯ НОРМА
+//   gut — сколько ккал сейчас в желудке и переваривается. Еда кладёт туда калории
+//   сразу, желудок пустеет за 4–6 ч (быстрее, когда полон; во сне медленнее).
+//   Сытость = «фон» + наполненность: 100 × (1 − e^(−gut/K)).
+//   Обед 700 ккал → ~90%, через 3 ч ~60%, через 5 ч ~30%, к утру после ужина ~20%.
+//   Фон 30% держится 6 ч после еды и потом медленно тает (−1,2 в час):
+//   пустой желудок ≠ «умирает от голода».
+// ═══════════════════════════════════════════════════════════════
+export function stomachK(goal) { return 300 + Math.max(-60, Math.min(120, ((goal || 2000) - 2000) * 0.08)); }
+function satBase(c) { return Math.max(0, 30 - 1.2 * Math.max(0, (c.hoursSinceLastMeal || 0) - 6)); }
+export function satietyFrom(c, goal) {
+    const base = satBase(c);
+    return Math.max(0, Math.min(100, base + (100 - base) * (1 - Math.exp(-(c.gut || 0) / stomachK(goal)))));
+}
+/** Сколько должно быть в желудке, чтобы сытость была v (ниже фона — 0) */
+export function gutFor(c, v, goal) {
+    const base = satBase(c);
+    const t = Math.min(99.5, v);
+    if (t <= base) return 0;
+    return -stomachK(goal) * Math.log(1 - (t - base) / (100 - base));
+}
+/** Поставить сытость (ИИ, калибровка, отладка): пересчитывает желудок, а если ниже фона — и часы без еды */
+export function setSatiety(c, v, goal) {
+    const t = Math.max(0, Math.min(100, v));
+    if (t < satBase(c)) c.hoursSinceLastMeal = Math.max(c.hoursSinceLastMeal || 0, 6 + (30 - t) / 1.2);
+    c.gut = gutFor(c, t, goal);
+    c.satiety = Math.round(satietyFrom(c, goal));
+}
+function ensureGut(c, goal) {
+    if (c.gut == null || !isFinite(c.gut)) setSatiety(c, c.satiety ?? 60, goal);
+}
 
 // Здоровье восстанавливается +1%/час если всё хорошо, падает если голод/болезнь
 export const HEALTH_REGEN_PER_HOUR = 0.8;
@@ -123,6 +156,7 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     if (hours <= 0) return { events: [] };
     const events = [];
     const dailyGoal = goal ?? goalOf(charData);
+    ensureGut(charData, dailyGoal);
 
     const level = normalizeActivity(activity) || 'low';
     const actMult = sleeping ? 1 : SCENE_ACTIVITY[level].strain;
@@ -182,9 +216,17 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     // Недавно съеденное «переваривается» (период полураспада ~2ч)
     charData.recentIntake = (charData.recentIntake || 0) * Math.pow(0.5, hours / 2);
 
-    // ─── Сытость ───
-    const satLoss = BASE_SATIETY_LOSS_PER_HOUR * hours * actMult * satietyMult * (sleeping ? 0.5 : 1);
-    charData.satiety = Math.max(0, charData.satiety - satLoss);
+    // ─── Сытость: желудок пустеет (полный — быстрее), во сне медленнее ───
+    {
+        const speed = Math.sqrt(actMult) * satietyMult * (sleeping ? 0.7 : 1);
+        let left = hours;
+        while (left > 1e-6) {
+            const dt = Math.min(0.5, left);
+            left -= dt;
+            const g = charData.gut || 0;
+            charData.gut = Math.max(0, g - Math.max(90, g * 0.25) * speed * dt);
+        }
+    }
 
     // ─── Вода ───
     const weightMult = Math.max(0.7, Math.min(1.5, (charData.weight || 65) / 65));
@@ -266,6 +308,7 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     }
 
     charData.hoursSinceLastMeal = (charData.hoursSinceLastMeal || 0) + hours;
+    charData.satiety = Math.round(satietyFrom(charData, dailyGoal));
 
     // ─── Алкоголь, кофеин, электролиты, часы без сна ───
     charData.bac = Math.max(0, (charData.bac || 0) - BAC_ELIMINATION_PER_HOUR * hours);
@@ -336,21 +379,19 @@ export function applyMeal(charData, calories, waterGain = 0, goal = null, opts =
     // Жадно и быстро — сигнал сытости запаздывает, переедание наступает раньше
     charData.recentIntake = (charData.recentIntake || 0) + cal * (opts.greedy ? 1.3 : 1);
 
-    // Сытость зависит от нормы: для нормы 2000 обед в 600 ккал ≈ +39%
-    // При анорексии чувство переполненности наступает раньше
+    // Сытость — от того, что лежит в желудке (не от доли дневной нормы).
+    // При анорексии переполненность наступает раньше; при тошноте еда «не лезет»
+    ensureGut(charData, g);
     const earlyFull = charData.ed?.anorexia ? 1.3 : 1;
-    // Утренняя тошнота: еда «не лезет» — насыщает хуже
-    const nausea = hasEffect(charData, 'morning_sickness') ? 0.6 : 1;
-    const satGain = Math.min(85, cal / g * 130 * earlyFull * nausea);
-    const overflow = charData.satiety + satGain - 100;
-    charData.satiety = Math.min(100, Math.round(charData.satiety + satGain));
+    const nausea = hasEffect(charData, 'morning_sickness') ? 0.7 : 1;
+    charData.gut = (charData.gut || 0) + cal * earlyFull * nausea;
 
-    // Любая настоящая еда сбрасывает часы голода; крошка (меньше 50 ккал) лишь немного сдвигает
+    // Настоящая еда (от 50 ккал) сбрасывает часы голода
     if (cal >= 50) {
         charData.hoursSinceLastMeal = 0;
-    } else if (cal > 0) {
-        charData.hoursSinceLastMeal = (charData.hoursSinceLastMeal || 0) * (1 - cal / 50);
-    }
+    }   // крошка (облизнул пальцы, попробовал) часы голода не сбрасывает
+    charData.satiety = Math.round(satietyFrom(charData, g));
+    const overflow = charData.gut > stomachK(g) * 3 ? 15 : 0;   // в желудке больше ~900 ккал — объелся
 
     charData.energy = Math.min(100, charData.energy + Math.min(12, cal / 60));
     if (waterGain > 0) charData.water = Math.min(100, charData.water + waterGain);
@@ -375,7 +416,10 @@ export function applyDrink(charData, waterGain, calories = 0, goal = null, extra
         charData.calories = (charData.calories || 0) + calories;
         storeEnergy(charData, calories, g);
         charData.recentIntake = (charData.recentIntake || 0) + calories * 0.5;
-        charData.satiety = Math.min(100, Math.round(charData.satiety + Math.min(20, calories / g * 60)));
+        // Калорийное питьё насыщает слабее еды
+        ensureGut(charData, g);
+        charData.gut = (charData.gut || 0) + calories * 0.5;
+        charData.satiety = Math.round(satietyFrom(charData, g));
     }
 }
 
@@ -387,7 +431,8 @@ export function applyVomit(charData) {
     charData.reserve = Math.max(0, (charData.reserve || 0) - lost);
     charData.calories = Math.max(0, (charData.calories || 0) - lost);
     charData.recentIntake = (charData.recentIntake || 0) * 0.4;
-    charData.satiety = Math.max(0, charData.satiety - 30);
+    charData.gut = (charData.gut || 0) * 0.3;
+    charData.satiety = Math.round(satietyFrom(charData, goalOf(charData)));
     charData.water = Math.max(0, charData.water - 10);
     charData.health = Math.max(0, charData.health - 2);
     charData.electrolyte = Math.min(100, (charData.electrolyte || 0) + 25);

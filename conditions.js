@@ -1,8 +1,8 @@
 // nell-nutrition/conditions.js
 // Продвинутая система болезней, беременности и физиологических состояний.
 
-import { goalOf } from './nutrition-engine.js';
-import { EFFECT_INFO, effectLevel, toggleEffect, grantEffect, hasEffect, seededChance } from './effects.js';
+import { goalOf, setSatiety } from './nutrition-engine.js';
+import { EFFECT_INFO, effectLevel, toggleEffect, grantEffect, hasEffect, seededChance, effectAllowed } from './effects.js';
 
 // ═══════════════════════════════════════════════════════════════
 // DISEASE DEFINITIONS — полное описание каждой болезни
@@ -865,7 +865,7 @@ function evaluateEffects(c, hours, added, removed) {
 
     // Эффекты от показателей снимаются сразу, как только показатель восстановился
     // (небольшой зазор между «включить» и «выключить» — чтобы не мигали)
-    T('hunger', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 4, off: c.satiety > 25 });
+    T('hunger', { on: c.satiety <= 27 && c.hoursSinceLastMeal >= 5, off: c.satiety > 32 });   // желудок пуст и прошло 8+ ч
     T('dehydration', { on: c.water <= 25, off: c.water > 30 });
     T('irritability', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
         off: c.satiety > 30 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });
@@ -946,8 +946,8 @@ const findEffectIn = (c, id) => [...c.buffs, ...c.debuffs].find(x => x.id === id
 // ПИЩЕВОЙ ПРОФИЛЬ: любимое, нелюбимое, тяга — у всех, не только у беременных
 // ═══════════════════════════════════════════════════════════════
 const foodNorm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-// Основы слов от 4 букв: «квашеную капусту» совпадёт с «квашеная капуста»
-const stems = (s) => foodNorm(s).split(' ').filter(w => w.length >= 4).map(w => w.slice(0, Math.max(4, w.length - 2)));
+// Основы слов от 3 букв (мёд, суп): «квашеную капусту» совпадёт с «квашеная капуста»
+const stems = (s) => foodNorm(s).split(' ').filter(w => w.length >= 3).map(w => w.slice(0, Math.max(3, w.length - 2)));
 
 /** Что из списка совпадает с названием съеденного (или null) */
 export function matchFood(item, list = []) {
@@ -987,14 +987,14 @@ export function foodEvents(c, ev, added = []) {
     }
     if (fav) {
         grantEffect(c, 'favorite_food', 3, added, fav);
-        c.satiety = Math.min(100, c.satiety + 5);
+        setSatiety(c, Math.min(100, c.satiety + 3), goalOf(c));
     }
     if (bad) {
         grantEffect(c, 'disliked_food', 2, added, bad);
-        c.satiety = Math.max(0, c.satiety - 5);   // насытило хуже: ели мало и через силу
+        setSatiety(c, Math.max(0, c.satiety - 3), goalOf(c));   // насытило хуже: ели мало и через силу
     }
     const sweetKcal = (ev.foods || []).filter(f => SWEET_RE.test(f.item)).reduce((a, f) => a + (f.calories || 0), 0);
-    if (sweetKcal >= 300 && !findEffectIn(c, 'sugar_crash')) {
+    if (sweetKcal >= 300 && effectAllowed('sugar_crash') && !findEffectIn(c, 'sugar_crash')) {
         grantEffect(c, 'sugar_crash', 2, added);
         c.energy = Math.max(0, c.energy - 8);
     }
@@ -1204,7 +1204,7 @@ const DISEASE_GAP_H = { mild: 8, moderate: 5, severe: 3, critical: 1 };
 const ED_GAP_H = { mild: 12, moderate: 8, severe: 5 };
 const SEVERITY_RANK = { critical: 4, severe: 3, moderate: 2, mild: 1 };
 const MAX_FOCUS = 1;          // событий на персонажа за ответ
-const CHAR_GAP_TURNS = 4;     // ответов между событиями одного персонажа
+const CHAR_GAP_TURNS = 6;     // ответов между событиями одного персонажа
 const NEW_GAP_TURNS = 2;      // новое (только что появившееся) — можно чуть раньше
 
 const DISEASE_CUES = {
