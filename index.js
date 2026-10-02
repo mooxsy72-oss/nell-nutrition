@@ -1587,28 +1587,59 @@ function renderBlock(id) {
 // сообщениями следит наблюдатель (observeChat) и возвращает блок на место.
 // Пока сообщение редактируется или ещё печатается — блок временно под текстом.
 const healCount = new Map();   // mesid → [время перестановок] — защита от «перетягивания» с другим расширением
+let streamingId = null;        // сообщение, которое сейчас печатается (только настоящий ответ, не фоновые запросы)
+
+// Абзацы ответа: p, цитаты, списки, заголовки — на любой глубине (текст может быть обёрнут
+// другим расширением в свой div). Вложенные друг в друга не считаем дважды.
+// Абзацы внутри чужих блоков с классом (чужой инфоблок, трекер) пропускаем — если есть другие.
+const PARA_SEL = 'p, blockquote, ul, ol, pre, h1, h2, h3, h4, h5, h6, hr, table, img, figure';
+function paragraphsOf(text) {
+    const all = [...text.querySelectorAll(PARA_SEL)].filter(n =>
+        !n.closest('.nn-ib') && !n.parentElement.closest(PARA_SEL.replace(', img', '').replace(', hr', '')));
+    const foreign = (n) => {
+        for (let x = n.parentElement; x && x !== text; x = x.parentElement) {
+            if (x.className && typeof x.className === 'string' && x.className.trim()) return true;
+            if (/^(DETAILS|ASIDE|TABLE)$/.test(x.tagName)) return true;
+        }
+        return false;
+    };
+    const own = all.filter(n => !foreign(n));
+    // картинки в конце — не абзацы текста, середину по ним не считаем
+    const textual = (own.length >= 2 ? own : all);
+    const noText = (n) => !n.textContent.trim();   // картинка, линия, пустой абзац с картинкой
+    while (textual.length && noText(textual[textual.length - 1])) textual.pop();
+    return textual;
+}
 
 function middleAnchor(text) {
-    const kids = [...text.children].filter(n => !n.classList.contains('nn-ib') && !/^(STYLE|SCRIPT|TEMPLATE)$/.test(n.tagName));
-    const blocks = kids.filter(n => n.tagName !== 'BR');
-    if (blocks.length >= 2) return { before: blocks[Math.floor(blocks.length / 2)] };
-    // Текст без абзацев, через <br>: встаём после среднего переноса
-    const brs = kids.filter(n => n.tagName === 'BR');
+    const paras = paragraphsOf(text);
+    if (paras.length >= 2) return { before: paras[Math.floor(paras.length / 2)] };
+    // Текст без абзацев или один абзац с переносами: встаём после среднего <br>
+    const brs = [...text.querySelectorAll('br')].filter(n => !n.closest('.nn-ib'));
     if (brs.length >= 2) return { after: brs[Math.floor(brs.length / 2)] };
     return null;
+}
+
+const fallbackLogged = new Set();
+function whyBottom(id, reason) {
+    const k = `${id}:${reason}`;
+    if (fallbackLogged.has(k)) return;
+    fallbackLogged.add(k);
+    console.info(`[NN] инфоблок сообщения ${id} под текстом: ${reason}`);
 }
 
 function resolvePos(el, id, text) {
     let pos = blockPos();
     if (pos !== 'middle') return pos;
-    if (el.dataset.nnNoMiddle === '1') return 'bottom';
-    if (text.querySelector('textarea') || el.classList.contains('editing')) return 'bottom';   // правка
-    if (generating && id === chat.length - 1) return 'bottom';                                   // ещё печатается
-    return middleAnchor(text) ? 'middle' : 'bottom';                                             // один абзац
+    if (el.dataset.nnNoMiddle === '1') { whyBottom(id, 'другое расширение постоянно убирает блок из текста'); return 'bottom'; }
+    if (text.querySelector('textarea') || el.querySelector('.edit_textarea')) return 'bottom';   // правка
+    if (streamingId != null && id === streamingId) return 'bottom';                               // ещё печатается
+    if (!middleAnchor(text)) { whyBottom(id, 'в тексте один абзац'); return 'bottom'; }
+    return 'middle';
 }
 
 function isPlaced(block, text, pos) {
-    if (pos === 'middle') return block.parentElement === text;
+    if (pos === 'middle') return text.contains(block);
     if (block.parentElement !== text.parentElement) return false;
     const rel = text.compareDocumentPosition(block);
     return pos === 'top' ? !!(rel & Node.DOCUMENT_POSITION_PRECEDING) : !!(rel & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -1630,7 +1661,10 @@ function placeBlock(el, block, id) {
     return true;
 }
 
-// Вернуть блок на место после чужих изменений сообщения
+// Вернуть блок на место после чужих изменений сообщения.
+// Если другое расширение снова и снова перерисовывает текст, не воюем: ждём, пока
+// сообщение «успокоится» (1,5 → 3 → 6 → 12 с), и только потом ставим блок. После 4 попыток — под текстом.
+const backoff = new Map();     // mesid → { until, step, timer }
 function healBlock(id) {
     const el = getMesEl(id);
     if (!el || !isEnabled()) return;
@@ -1638,14 +1672,29 @@ function healBlock(id) {
     if (!block) { renderBlock(id); return; }
     const text = el.querySelector('.mes_text');
     if (!text || isPlaced(block, text, resolvePos(el, id, text))) return;
-    // Больше 6 перестановок за 3 секунды — кто-то упорно вычищает текст: в этом сообщении ставим под текстом
     const now = Date.now();
+    const bo = backoff.get(id);
+    if (bo && now < bo.until) {
+        clearTimeout(bo.timer);
+        bo.until = now + 1500 * 2 ** (bo.step - 1);   // пока сообщение меняется — ждём дальше
+        bo.timer = setTimeout(() => healBlock(id), bo.until - now + 20);
+        return;
+    }
     const list = (healCount.get(id) || []).filter(t => now - t < 3000);
     list.push(now);
     healCount.set(id, list);
-    if (list.length > 6 && blockPos() === 'middle') {
-        el.dataset.nnNoMiddle = '1';
-        console.warn('[NN] инфоблок в сообщении', id, 'постоянно выкидывают из текста — ставлю под текстом');
+    if (list.length > 4 && blockPos() === 'middle') {
+        const step = (bo?.step || 0) + 1;
+        healCount.set(id, []);
+        if (step > 4) {
+            el.dataset.nnNoMiddle = '1';
+        } else {
+            const until = now + 1500 * 2 ** (step - 1);
+            backoff.set(id, { until, step, timer: setTimeout(() => healBlock(id), until - now + 20) });
+            console.info(`[NN] текст сообщения ${id} перерисовывается снова и снова — жду ${(until - now) / 1000} с`);
+            placeBlock(el, block, id);   // пока ждём — блок хотя бы виден
+            return;
+        }
     }
     placeBlock(el, block, id);
 }
@@ -2397,6 +2446,9 @@ function injectSettingsPanel() {
             localStorage.setItem(LS.position, e.target.value);
             document.querySelectorAll('#chat .mes[data-nn-no-middle]').forEach(m => delete m.dataset.nnNoMiddle);
             healCount.clear();
+            backoff.forEach(b => clearTimeout(b.timer));
+            backoff.clear();
+            fallbackLogged.clear();
             renderAllBlocks();
         });
         document.getElementById('nn-set-era')?.addEventListener('change', e => {
@@ -2439,6 +2491,8 @@ let generating = false;
 function onGenerationStarted(type, params, dryRun) {
     if (dryRun) return;
     generating = true;
+    // Фоновые запросы (картинки, суммаризация — type 'quiet') сообщение не печатают
+    if (type !== 'quiet') streamingId = ['swipe', 'regenerate', 'continue'].includes(type) ? lastBotIndex() : chat.length;
     if (!isEnabled()) return;
     if (!state) loadState();
     const regen = ['swipe', 'regenerate', 'continue'].includes(type);
@@ -2447,10 +2501,19 @@ function onGenerationStarted(type, params, dryRun) {
 }
 function onGenerationEnded() {
     generating = false;
-    if (blockPos() === 'middle') setTimeout(renderLiveBlock, 120);
+    finishStreaming();
+}
+// Ответ допечатан — блок переезжает в середину. Картинку и чужие блоки дорисовывают позже —
+// наблюдатель вернёт блок на место после них.
+function finishStreaming() {
+    if (streamingId == null) return;
+    const id = streamingId;
+    streamingId = null;
+    if (blockPos() === 'middle') for (const ms of [120, 800, 2500]) setTimeout(() => healBlock(id), ms);
 }
 
 function onMessageReceived(id) {
+    if (Number(id) === streamingId || streamingId === chat.length) finishStreaming();
     if (!isEnabled()) return;
     if (!state) loadState();
     processAiResponse(Number(id));
