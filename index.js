@@ -357,7 +357,7 @@ const isNight = (h) => h >= 23 || h < 7;
  * @param {number} hours
  * @param {{user:string, bot:string}} activityOf
  * @param {boolean} sleeping — тег сказал, что спали всё это время
- * @param {{user:boolean, bot:boolean}} fedOf — едят ли за кадром по распорядку
+ * @param {{user:number, bot:number}} fedOf — сколько едят за кадром: 1 — как обычно, 0.5 — мало, 0 — не едят
  * @param {{user:boolean, bot:boolean}} drinkOf — пьют ли за кадром
  */
 function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: true, bot: true }, declaredSkip = false, loggedMeal = { user: false, bot: false }) {
@@ -386,7 +386,10 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
         const step = routine ? Math.min(1, left) : Math.min(6, left);
         left -= step;
         const h0 = ((state.clockHours % 24) + 24) % 24;
-        const asleep = sleeping || (routine && isNight((h0 + step / 2) % 24));
+        // sleeping=true на длинном отрезке — это сон в его конце, а не «проспали неделю»:
+        // спят только последние 14 ч, до этого — обычный распорядок (едят, пьют, спят ночью)
+        const sleptTail = sleeping && (!routine || endAt - (state.clockHours + step / 2) <= 14);
+        const asleep = sleptTail || (routine && isNight((h0 + step / 2) % 24));
 
         for (const ch of chars) {
             const c = ch.data, g = effectiveGoal(c);
@@ -408,8 +411,9 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                     const share = hab.noBreakfast ? baseShare / (1 - MEALS[0][1]) : baseShare;
                     const at = state.clockHours - h0 + (h0 < mh ? mh : mh + 24);
                     if (skipLast[ch.who] && lastMealAt != null && Math.abs(at - lastMealAt) < 1e-6) continue;
-                    applyMeal(c, dayTarget * share, 8, g);
-                    markMeal(c, dayTarget * share, at);
+                    const portion = dayTarget * share * fedOf[ch.who];
+                    applyMeal(c, portion, 8, g);
+                    markMeal(c, portion, at);
                     // Обычный обед по распорядку — не обжорство
                     c.recentIntake = Math.min(c.recentIntake || 0, g * 0.4);
                     c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
@@ -423,7 +427,8 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
             }
             if (routine && drinkOf[ch.who] && !asleep) {
                 // Пьют по жажде: чем меньше воды, тем больше пьют — вода держится около 75–80%
-                applyDrink(c, Math.max(0, 82 - c.water) * Math.min(1, 0.6 * step), 0, g);
+                const target = drinkOf[ch.who] >= 1 ? 82 : 50;   // «пили мало» — вода держится около половины
+                applyDrink(c, Math.max(0, target - c.water) * Math.min(1, 0.6 * step), 0, g);
             }
         }
 
@@ -927,14 +932,17 @@ function processAiResponse(messageId) {
     // За кадром едят по распорядку. Лёгкий режим: всегда, кроме offscreen=hungry.
     // Хард: только если ИИ отметил offscreen=fed.
     const off = tag?.offscreen;
-    const offFed = isHard() ? off === 'fed' : off !== 'hungry' && off !== 'thirsty';
+    // Лёгкий режим: offscreen=hungry — «ели мало» (полпорции), а не «не ели вовсе»
+    const offFed = isHard() ? (off === 'fed' ? 1 : 0) : off === 'hungry' ? 0.5 : 1;
     // Распорядок идёт на любом длинном отрезке — даже если ИИ записал еду: раньше из-за этого
     // «утро → следующее утро с завтраком» теряло обед и ужин и считалось дефицитом.
     // Записанная еда заменяет только последний приём по распорядку (см. advanceTime).
     const fedOf = { user: offFed, bot: offFed };
     const loggedMeal = { user: userFood.length > 0, bot: botFood.length > 0 };
     // Вода за кадром есть всегда, кроме offscreen=thirsty
-    const drinkOf = { user: off !== 'thirsty', bot: off !== 'thirsty' };
+    // Лёгкий режим: offscreen=thirsty — «пили мало», хард — «воды не было»
+    const drinkVal = off !== 'thirsty' ? 1 : isHard() ? 0 : 0.5;
+    const drinkOf = { user: drinkVal, bot: drinkVal };
 
     const weightBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.weight]));
     const burnedBefore = Object.fromEntries(activeChars().map(ch => [ch.who, ch.data.burned || 0]));
@@ -1360,7 +1368,7 @@ function tagFieldRules(userName, botName) {
         `• Only if true: _vomited=true · _care=true (being treated) · _heal=ID:+N (+5…+15, −N on a setback) · _clear=EFFECT_ID (effect passed) · _weight=+2/-3/62 (story states it) · _likes/_dislikes/_habits=FOOD (new tastes; -FOOD to remove).`,
         isHard()
             ? `• SURVIVAL: on a skip add offscreen=fed only if they had food, else hungry (thirsty = no water). Never invent meals.`
-            : `• On a skip they eat, drink and sleep normally unless the story says otherwise (offscreen=hungry / thirsty).`,
+            : `• On a skip they eat, drink and sleep normally — illness, grief or recovery included (someone feeds them). offscreen=hungry / thirsty only if the story says food or water ran out (famine, captivity, lost). sleeping=true only for the sleep at the end of the skip.`,
     ].filter(Boolean).join('\n');
 }
 
