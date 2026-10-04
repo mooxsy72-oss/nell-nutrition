@@ -455,10 +455,78 @@
 }
 
 /* ─── Панель в меню расширений ────────────────────────────── */
-.nn-settings { display: flex; flex-direction: column; gap: 6px; }
-.nn-settings .nn-settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.nn-settings .nn-settings-row .text_pole { flex: 1; min-width: 120px; margin: 0; }
-.nn-settings .nn-hint { margin: 2px 0 0; font-size: 0.85em; opacity: 0.7; }
+/* ─── Панель настроек ───
+   Без display у .nn-settings: свёрнуто/развёрнуто решает таверна (inline-drawer).
+   Цвета — из темы таверны. Выбор из двух: плитки (режим, мир) и «таблетки» (инфоблок). */
+.nn-settings > * + * { margin-top: 12px; }
+.nn-settings input[type="radio"],
+.nn-settings .nn-switch input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+
+.nn-set-group { display: flex; flex-direction: column; gap: 6px; }
+.nn-set-title { font-size: 0.85em; color: var(--nn-mute); padding-left: 2px; }
+
+/* Плитки */
+.nn-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.nn-opt { display: block; margin: 0; cursor: pointer; }
+.nn-opt-box {
+    display: flex; align-items: flex-start; gap: 9px; height: 100%; box-sizing: border-box;
+    padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--nn-line); background: var(--nn-soft);
+    transition: border-color .15s, background-color .15s;
+}
+.nn-opt-box > i { margin-top: 2px; width: 1.1em; text-align: center; color: var(--nn-mute); }
+.nn-opt-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.nn-opt-text b { font-weight: 600; }
+.nn-opt-text small { font-size: 0.8em; line-height: 1.3; color: var(--nn-mute); }
+.nn-opt:hover .nn-opt-box { border-color: var(--nn-line-strong); }
+.nn-opt input:checked + .nn-opt-box {
+    border-color: var(--nn-acc);
+    background: color-mix(in srgb, var(--nn-acc) 12%, transparent);
+}
+.nn-opt input:checked + .nn-opt-box > i { color: var(--nn-acc); }
+
+/* Таблетки */
+.nn-seg { display: flex; padding: 3px; gap: 3px; border-radius: 999px; background: var(--nn-soft-2); }
+.nn-seg-opt { flex: 1; margin: 0; cursor: pointer; }
+.nn-seg-opt span {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 5px 8px; border-radius: 999px; font-size: 0.9em; text-align: center;
+    color: var(--nn-mute); transition: background-color .15s, color .15s;
+}
+.nn-seg-opt span i { font-size: 0.85em; }
+.nn-seg-opt:hover span { color: var(--nn-fg); }
+.nn-seg-opt input:checked + span {
+    color: var(--nn-fg);
+    background: color-mix(in srgb, var(--nn-acc) 22%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nn-acc) 55%, transparent);
+}
+
+/* Переключатель */
+.nn-switch { display: flex; align-items: center; gap: 10px; margin: 0; cursor: pointer; position: relative; }
+.nn-switch-track {
+    position: relative; flex: none; width: 34px; height: 19px; border-radius: 999px;
+    background: var(--nn-soft-2); border: 1px solid var(--nn-line); transition: background-color .15s, border-color .15s;
+}
+.nn-switch-track::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--nn-mute); transition: transform .15s, background-color .15s;
+}
+.nn-switch input:checked + .nn-switch-track { background: color-mix(in srgb, var(--nn-acc) 35%, transparent); border-color: var(--nn-acc); }
+.nn-switch input:checked + .nn-switch-track::after { transform: translateX(15px); background: var(--nn-acc); }
+
+/* Фокус с клавиатуры */
+.nn-settings input:focus-visible + .nn-opt-box,
+.nn-settings input:focus-visible + span,
+.nn-settings input:focus-visible + .nn-switch-track { outline: 2px solid var(--nn-acc); outline-offset: 2px; }
+
+/* Кнопки */
+.nn-set-actions { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--nn-line); }
+.nn-set-actions .menu_button { flex: 1; margin: 0; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 6px; }
+
+@media (max-width: 420px) { .nn-opts { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+    .nn-opt-box, .nn-seg-opt span, .nn-switch-track, .nn-switch-track::after { transition: none; }
+}
 
 /* ─── Аватарки ────────────────────────────────────────────── */
 .nn-av {

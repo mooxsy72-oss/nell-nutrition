@@ -2205,90 +2205,6 @@ function setEnabled(val) {
     renderAllBlocks();
 }
 
-const DEBUG_OPTIONS = [
-    ['disease:hypoglycemia:mild', 'Болезнь: гипогликемия, лёгкая'],
-    ['disease:hypoglycemia:critical', 'Болезнь: гипогликемия, критическая'],
-    ['disease:starvation:moderate', 'Болезнь: истощение, среднее'],
-    ['disease:dehydration_disease:moderate', 'Болезнь: обезвоживание, среднее'],
-    ['disease:malnutrition:mild', 'Болезнь: недоедание, лёгкое'],
-    ['disease:refeeding:severe', 'Болезнь: рефидинг-синдром'],
-    ['disease:electrolyte:moderate', 'Болезнь: электролитный дисбаланс'],
-    ['disease:alcohol_poisoning:severe', 'Болезнь: алкогольное отравление'],
-    ['disease:cold:moderate', 'Болезнь: простуда'],
-    ['disease:food_poisoning:moderate', 'Болезнь: пищевое отравление'],
-    ['disease:dysentery:moderate', 'Болезнь: дизентерия'],
-    ['disease:gastritis:mild', 'Болезнь: гастрит'],
-    ['disease:anemia:mild', 'Болезнь: анемия'],
-    ['disease:scurvy:mild', 'Болезнь: цинга'],
-    ['disease:food_obsession:moderate', 'Психика: мысли о еде'],
-    ['disease:hunger_apathy:mild', 'Психика: голодная апатия'],
-    ['disease:food_insecurity:mild', 'Психика: пищевая тревожность'],
-    ['stat:hunger', 'Состояние: голодный'],
-    ['stat:thirst', 'Состояние: жажда'],
-    ['stat:tired', 'Состояние: устал'],
-    ['stat:drunk', 'Состояние: пьян (1.2‰)'],
-    ['stat:coffee', 'Состояние: много кофеина'],
-    ['stat:awake', 'Состояние: 22 часа без сна'],
-    ['stat:perfect', 'Состояние: сыт, напоен, бодр'],
-    ['effect:hangover', 'Эффект: похмелье'],
-    ['effect:rested', 'Эффект: выспался'],
-    ['effect:shame', 'Эффект: стыд и вина'],
-    ['effect:craving', 'Эффект: тяга к еде (беременность)'],
-    ['effect:morning_sickness', 'Эффект: утренняя тошнота'],
-];
-const DEBUG_STATS = {
-    hunger: { satiety: 12, hoursSinceLastMeal: 8 },
-    thirst: { water: 20 },
-    tired: { energy: 25 },
-    drunk: { bac: 1.2, bacPeak: 1.2 },
-    coffee: { caffeine: 450 },
-    awake: { hoursAwake: 22 },
-    perfect: { satiety: 90, water: 90, energy: 92, health: 100 },
-};
-
-function debugApply(code, who) {
-    const data = who === 'bot' ? getBotState() : state.user;
-    if (!data) return;
-    const g = effectiveGoal(data);
-    const [kind, id, sev] = code.split(':');
-    if (kind === 'disease') {
-        const def = DISEASE_DB[id];
-        data.diseases = data.diseases.filter(d => d.id !== id);
-        const st = def.stages[sev];
-        data.diseases.push({
-            id, name: def.nameRu, nameEn: def.nameEn, severity: sev,
-            effects: st.effects, effectsEn: st.effectsEn, modifiers: st.modifiers, symptoms: st.symptoms,
-            elapsedHours: 0, progress: 0, recovering: false, since: '0ч',
-        });
-        if (id === 'hypoglycemia' || id === 'starvation') Object.assign(data, { reserve: 0, satiety: 5, hoursSinceLastMeal: (st.threshold?.hoursSinceLastMeal || 12) + 1 });
-        if (id === 'dehydration_disease') data.water = st.threshold?.water ?? 10;
-        if (id === 'malnutrition') data.daysWithDeficit = 3;
-        if (id === 'electrolyte') data.electrolyte = 55;
-        if (id === 'alcohol_poisoning') data.bac = 3.2;
-        if (id === 'food_obsession') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 5);
-        if (id === 'hunger_apathy') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 4);
-        if (id === 'food_insecurity') { data.starvationTrauma = true; data.hoursSinceLastMeal = 10; }
-        if (id === 'refeeding') data.diseases.find(d => d.id === 'refeeding').recovering = true;
-        if (id === 'anemia') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 10);
-        if (id === 'scurvy') data.daysNoProduce = Math.max(data.daysNoProduce || 0, 30);
-        if (id === 'gastritis') data.daysWithDeficit = Math.max(data.daysWithDeficit || 0, 3);
-    } else if (kind === 'effect') {
-        grantEffect(data, id, id === 'rested' ? 10 : id === 'hangover' ? 8 : 4, [], id === 'craving' ? 'квашеная капуста' : null);
-        if (id === 'craving') { const e = data.debuffs.find(x => x.id === 'craving'); if (e) e.detailEn = 'sauerkraut'; }
-    } else if (id === 'overfed') {
-        data.recentIntake = g * 0.8; data.satiety = 100;
-    } else {
-        Object.assign(data, DEBUG_STATS[id] || {});
-        if (id === 'perfect') data.reserve = g * 0.8;
-    }
-    setSatiety(data, data.satiety, g);   // желудок под выставленную сытость
-    evaluateConditions(data, 0);
-    updateFocus(data, state.turn, new Set([...data.diseases.map(d => d.id), ...data.debuffs.map(d => d.id)]), { foodInScene: true, isUser: who === 'user', clock: state.clockHours });
-    saveState();
-    injectPrompt();
-    renderLiveBlock();
-}
-
 function injectSettingsPanel() {
     let attempts = 0;
     const iv = setInterval(() => {
@@ -2298,6 +2214,24 @@ function injectSettingsPanel() {
         clearInterval(iv);
         if (document.getElementById('nn-settings-drawer')) return;
 
+        // Выбор из двух — плитки (крупно, с короткой подписью) или переключатель-«таблетка»
+        const tile = (name, value, on, icon, title, sub) => `
+            <label class="nn-opt">
+                <input type="radio" name="${name}" value="${value}" ${on ? 'checked' : ''}>
+                <span class="nn-opt-box"><i class="fa-solid ${icon}"></i><span class="nn-opt-text"><b>${title}</b><small>${sub}</small></span></span>
+            </label>`;
+        const seg = (name, value, on, icon, title) => `
+            <label class="nn-seg-opt">
+                <input type="radio" name="${name}" value="${value}" ${on ? 'checked' : ''}>
+                <span><i class="fa-solid ${icon}"></i>${title}</span>
+            </label>`;
+        const sw = (id, on, title) => `
+            <label class="nn-switch">
+                <input type="checkbox" id="${id}" ${on ? 'checked' : ''}>
+                <span class="nn-switch-track" aria-hidden="true"></span>
+                <span>${title}</span>
+            </label>`;
+
         container.insertAdjacentHTML('beforeend', `
         <div class="inline-drawer" id="nn-settings-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
@@ -2305,89 +2239,89 @@ function injectSettingsPanel() {
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content nn-settings">
-                <label class="checkbox_label"><input type="checkbox" id="nn-set-enabled" ${isEnabled() ? 'checked' : ''}>Включить расширение</label>
-                <label class="checkbox_label"><input type="checkbox" id="nn-set-expand" ${expandLast() ? 'checked' : ''}>Раскрывать инфоблок последнего ответа</label>
-                <label class="nn-settings-row">Учёт калорий
-                    <select id="nn-set-mode" class="text_pole">
-                        <option value="easy" ${isHard() ? '' : 'selected'}>Лёгкий — можно пропускать дни</option>
-                        <option value="hard" ${isHard() ? 'selected' : ''}>Хардкор — выживание</option>
-                    </select>
-                </label>
-                <label class="nn-settings-row">Эпоха
-                    <select id="nn-set-era" class="text_pole">
-                        <option value="modern" ${isHistorical() ? '' : 'selected'}>Современность</option>
-                        <option value="historical" ${isHistorical() ? 'selected' : ''}>Историческая — без современной медицины</option>
-                    </select>
-                </label>
-                <label class="nn-settings-row">Инфоблок показывать
-                    <select id="nn-set-scope" class="text_pole">
-                        <option value="all" ${scopeAll() ? 'selected' : ''}>под каждым ответом бота</option>
-                        <option value="last" ${scopeAll() ? '' : 'selected'}>только под последним</option>
-                    </select>
-                </label>
-                <label class="nn-settings-row">Место в сообщении
-                    <select id="nn-set-position" class="text_pole">
-                        <option value="bottom" ${blockPos() === 'bottom' ? 'selected' : ''}>под текстом</option>
-                        <option value="top" ${blockPos() === 'top' ? 'selected' : ''}>над текстом</option>
-                    </select>
-                </label>
-                <p class="nn-hint">В старых ответах блок показывает состояние на тот момент. В последнем доступны вкладки «Вес» и «Параметры». Еду и питьё расширение считает само по ролплею.</p>
+                ${sw('nn-set-enabled', isEnabled(), 'Расширение включено')}
 
-                <hr class="sysHR">
-                <b>Проверка</b>
-                <div class="nn-settings-row">
-                    <select id="nn-dbg-who" class="text_pole"><option value="user">Юзер</option><option value="bot">Бот</option></select>
-                    <select id="nn-dbg-code" class="text_pole">${DEBUG_OPTIONS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
-                    <div id="nn-dbg-apply" class="menu_button">Применить</div>
+                <div class="nn-set-group">
+                    <div class="nn-set-title">Учёт</div>
+                    <div class="nn-opts">
+                        ${tile('nn-mode', 'easy', !isHard(), 'fa-feather', 'Лёгкий', 'На скипах едят сами, болезни не тяжелее средних')}
+                        ${tile('nn-mode', 'hard', isHard(), 'fa-skull', 'Хардкор', 'Выживание: голод и болезни всерьёз')}
+                    </div>
                 </div>
-                <div class="nn-settings-row">
-                    <div id="nn-dbg-clear" class="menu_button">Очистить состояния</div>
-                    <div id="nn-dbg-reset" class="menu_button redWarningBG">Сбросить чат</div>
+
+                <div class="nn-set-group">
+                    <div class="nn-set-title">Мир</div>
+                    <div class="nn-opts">
+                        ${tile('nn-era', 'modern', !isHistorical(), 'fa-house-medical', 'Современность', 'Врачи, лекарства, чистая вода')}
+                        ${tile('nn-era', 'historical', isHistorical(), 'fa-scroll', 'Старина', 'Травы и колодцы, болеют чаще и дольше')}
+                    </div>
+                </div>
+
+                <div class="nn-set-group">
+                    <div class="nn-set-title">Инфоблок</div>
+                    <div class="nn-seg">
+                        ${seg('nn-scope', 'all', scopeAll(), 'fa-layer-group', 'Под каждым ответом')}
+                        ${seg('nn-scope', 'last', !scopeAll(), 'fa-square', 'Только в последнем')}
+                    </div>
+                    <div class="nn-seg">
+                        ${seg('nn-position', 'bottom', blockPos() === 'bottom', 'fa-arrow-down-long', 'Под текстом')}
+                        ${seg('nn-position', 'top', blockPos() === 'top', 'fa-arrow-up-long', 'Над текстом')}
+                    </div>
+                    ${sw('nn-set-expand', expandLast(), 'Раскрывать в последнем ответе')}
+                </div>
+
+                <div class="nn-set-actions">
+                    <div id="nn-dbg-clear" class="menu_button" title="Убрать болезни и эффекты, вернуть сытость, воду и силы к норме">
+                        <i class="fa-solid fa-broom"></i> Очистить состояния
+                    </div>
+                    <div id="nn-dbg-reset" class="menu_button redWarningBG" title="Начать учёт в этом чате заново">
+                        <i class="fa-solid fa-rotate-left"></i> Сбросить чат
+                    </div>
                 </div>
             </div>
         </div>`);
 
-        document.getElementById('nn-set-enabled')?.addEventListener('change', e => setEnabled(e.target.checked));
-        document.getElementById('nn-set-expand')?.addEventListener('change', e => {
+        const root = document.getElementById('nn-settings-drawer');
+        root.querySelector('#nn-set-enabled')?.addEventListener('change', e => setEnabled(e.target.checked));
+        root.querySelector('#nn-set-expand')?.addEventListener('change', e => {
             localStorage.setItem(LS.expand, e.target.checked ? 'true' : 'false');
             renderLiveBlock();
         });
-        document.getElementById('nn-set-mode')?.addEventListener('change', e => {
-            localStorage.setItem(LS.mode, e.target.value);
-            setHungerCap(!isHard());
-            setEffectsMode(isHard());
-            injectPrompt();
+        root.addEventListener('change', e => {
+            const t = e.target;
+            if (t.type !== 'radio') return;
+            if (t.name === 'nn-mode') {
+                localStorage.setItem(LS.mode, t.value);
+                setHungerCap(!isHard());
+                setEffectsMode(isHard());
+                injectPrompt();
+            } else if (t.name === 'nn-era') {
+                localStorage.setItem(LS.era, t.value);
+                setEra(t.value);
+                injectPrompt();
+            } else if (t.name === 'nn-scope') {
+                localStorage.setItem(LS.scope, t.value);
+                renderAllBlocks();
+            } else if (t.name === 'nn-position') {
+                localStorage.setItem(LS.position, t.value);
+                renderAllBlocks();
+            }
         });
-        document.getElementById('nn-set-position')?.addEventListener('change', e => {
-            localStorage.setItem(LS.position, e.target.value);
-            renderAllBlocks();
-        });
-        document.getElementById('nn-set-era')?.addEventListener('change', e => {
-            localStorage.setItem(LS.era, e.target.value);
-            setEra(e.target.value);
-            injectPrompt();
-        });
-        document.getElementById('nn-set-scope')?.addEventListener('change', e => {
-            localStorage.setItem(LS.scope, e.target.value);
-            renderAllBlocks();
-        });
-        document.getElementById('nn-dbg-apply')?.addEventListener('click', () => {
+        root.querySelector('#nn-dbg-clear')?.addEventListener('click', () => {
             if (!state) loadState();
-            debugApply(document.getElementById('nn-dbg-code').value, document.getElementById('nn-dbg-who').value);
-        });
-        document.getElementById('nn-dbg-clear')?.addEventListener('click', () => {
-            if (!state) return;
+            if (!confirm('Убрать болезни и эффекты и вернуть сытость, воду и силы к норме?')) return;
             for (const { data } of activeChars()) {
                 Object.assign(data, {
                     diseases: [], buffs: [], debuffs: [], satiety: 80, water: 85, energy: 85, health: 100,
                     hoursSinceLastMeal: 2, reserve: effectiveGoal(data) * 0.6, recentIntake: 0, daysWithDeficit: 0, fatLedger: 0,
-                    salience: {}, focus: [],
+                    dryHours: 0, focus: [],
                 });
+                setSatiety(data, 80, effectiveGoal(data));
             }
             saveState(); injectPrompt(); renderLiveBlock();
         });
-        document.getElementById('nn-dbg-reset')?.addEventListener('click', () => {
-            if (!confirm('Сбросить весь прогресс питания в этом чате?')) return;
+        root.querySelector('#nn-dbg-reset')?.addEventListener('click', () => {
+            if (!confirm('Сбросить весь учёт питания в этом чате?')) return;
             chat_metadata[META_KEY] = defaultState();
             loadState(); saveState(); injectPrompt(); renderAllBlocks();
         });
