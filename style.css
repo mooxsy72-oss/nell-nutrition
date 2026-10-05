@@ -684,3 +684,137 @@
 
 /* ─── Место инфоблока в сообщении ─── */
 .nn-ib.nn-pos-top { margin: 2px 0 10px; }
+
+/* ─── Анализатор: профиль подключения ─────────────────────── */
+.nn-an-row { display: flex; align-items: stretch; gap: 6px; transition: opacity 0.2s ease; }
+.nn-an:not(.nn-an-on) .nn-an-row { opacity: 0.6; }
+.nn-an-pick {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--nn-line);
+    border-radius: 8px;
+    background: var(--nn-soft);
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.nn-an-pick:hover { border-color: var(--nn-line-strong); }
+.nn-an-pick:focus-within { border-color: var(--nn-acc); }
+.nn-an-has .nn-an-pick { border-color: color-mix(in srgb, var(--nn-acc) 55%, transparent); background: color-mix(in srgb, var(--nn-acc) 8%, transparent); }
+.nn-an-ico {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    color: var(--nn-mute);
+    pointer-events: none;
+}
+.nn-an-has .nn-an-ico { color: var(--nn-acc); }
+.nn-an-ico img, .nn-an-ico svg { width: 16px; height: 16px; object-fit: contain; }
+.nn-settings select.nn-an-select {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 26px 6px 0;
+    border: 0;
+    background: transparent;
+    color: var(--nn-fg);
+    font: inherit;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    outline: none;
+}
+.nn-settings select.nn-an-select:disabled { font-weight: 400; color: var(--nn-mute); cursor: default; }
+.nn-settings select.nn-an-select option,
+.nn-settings select.nn-an-select optgroup { background: var(--SmartThemeBlurTintColor, #222); color: var(--nn-fg); font-weight: 400; }
+.nn-an-caret { position: absolute; right: 9px; font-size: 0.75em; color: var(--nn-mute); pointer-events: none; }
+
+.nn-settings .nn-an-btn {
+    flex: none;
+    width: 34px;
+    min-height: 32px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+}
+.nn-settings .nn-an-btn.disabled { opacity: 0.4; pointer-events: none; }
+.nn-an-btn.nn-an-spin i { animation: nn-spin-once 0.5s ease; }
+.nn-an-btn.nn-an-busy i { animation: nn-pulse 0.9s ease-in-out infinite; color: var(--nn-acc); }
+
+.nn-an-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding-left: 4px;
+    font-size: 0.82em;
+    color: var(--nn-mute);
+    animation: nn-fade-in 0.2s ease;
+}
+.nn-an-status[hidden] { display: none; }
+.nn-an-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--nn-mute); }
+.nn-an-status[data-kind="good"] .nn-an-dot { background: var(--nn-good); }
+.nn-an-status[data-kind="warn"] .nn-an-dot { background: var(--nn-warn); }
+.nn-an-status[data-kind="bad"] .nn-an-dot { background: var(--nn-bad); }
+.nn-an-status[data-kind="bad"] { color: var(--nn-bad); }
+.nn-an-status[data-kind="wait"] .nn-an-dot { background: var(--nn-acc); animation: nn-pulse 0.9s ease-in-out infinite; }
+
+/* ─── Инфоблок: идёт анализ ───────────────────────────────── */
+.nn-ib { position: relative; }
+.nn-ib.nn-analyzing::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40%;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--nn-acc), transparent);
+    animation: nn-scan 1.8s ease-in-out infinite;
+    pointer-events: none;
+    will-change: transform;
+}
+.nn-ib.nn-analyzing .nn-people { opacity: 0.75; transition: opacity 0.3s ease; }
+.nn-an-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    color: var(--nn-acc);
+    font-size: 0.85em;
+}
+.nn-an-badge + .nn-chev { margin-left: 4px; }
+.nn-an-badge > i { animation: nn-pulse 1.8s ease-in-out infinite; }
+.nn-an-dots { display: inline-flex; gap: 2px; }
+.nn-an-dots i {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: nn-dot 1.2s ease-in-out infinite;
+}
+.nn-an-dots i:nth-child(2) { animation-delay: 0.15s; }
+.nn-an-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+/* Тег восстановлен — короткая подсветка рамки */
+.nn-ib.nn-an-done { animation: nn-done 1.4s ease-out; }
+
+@keyframes nn-scan { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes nn-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+@keyframes nn-dot { 0%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+@keyframes nn-done { from { border-color: var(--nn-acc); box-shadow: 0 0 0 1px color-mix(in srgb, var(--nn-acc) 35%, transparent); } to { border-color: var(--nn-line); box-shadow: 0 0 0 1px transparent; } }
+@keyframes nn-spin-once { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+@keyframes nn-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .nn-ib.nn-analyzing::before { animation: none; width: 100%; opacity: 0.6; }
+    .nn-an-badge > i, .nn-an-dots i, .nn-an-btn i, .nn-an-dot, .nn-ib.nn-an-done { animation: none !important; }
+}

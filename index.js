@@ -24,6 +24,7 @@ import {
 } from './conditions.js';
 import { EFFECT_INFO, effectView, drinkExtras, grantEffect, resolveEffectId, hasEffect, setEffectsMode } from './effects.js';
 import { ACTIVITY_LEVELS, BUILD_TYPES, calculateCalorieGoal } from './analyzer.js';
+import { cmProfiles, profileExists, profileIcon, askProfile, checkProfile } from './fallback.js';
 
 // ═══════════════════════════════════════════════════════════════
 // НАСТРОЙКИ (localStorage — общие для всех чатов)
@@ -38,6 +39,8 @@ const LS = {
     mode: 'nellNutrition_mode',            // 'easy' — пропуски дней без голодной смерти, 'hard' — выживание
     era: 'nellNutrition_era',              // 'modern' | 'historical' — без современной медицины
     position: 'nellNutrition_position',    // 'bottom' | 'top' — где инфоблок в сообщении
+    fallback: 'nellNutrition_fallback',    // запасной анализатор, если в ответе нет тега
+    fallbackProfile: 'nellNutrition_fallbackProfile',   // id профиля Connection Manager
 };
 const lsGet = (k, d) => { const v = localStorage.getItem(k); return v === null ? d : v; };
 const isEnabled = () => lsGet(LS.enabled, 'true') !== 'false';
@@ -45,6 +48,8 @@ const scopeAll = () => lsGet(LS.scope, 'all') === 'all';
 const expandLast = () => lsGet(LS.expand, 'false') === 'true';
 const isHard = () => lsGet(LS.mode, 'easy') === 'hard';
 const isHistorical = () => lsGet(LS.era, 'modern') === 'historical';
+const fallbackOn = () => lsGet(LS.fallback, 'false') === 'true';
+const fallbackProfile = () => lsGet(LS.fallbackProfile, '');
 const blockPos = () => (lsGet(LS.position, 'bottom') === 'top' ? 'top' : 'bottom');   // старое 'middle' → под текстом
 
 // Названия и иконки состояний берутся из баз болезней и эффектов
@@ -856,8 +861,10 @@ function processAiResponse(messageId) {
     // 1) обычный тег-комментарий; 2) сохранённый для этого же текста;
     // 3) тег «не по форме» (строкой, в ```-блоке, без -->) — читаем и вырезаем из видимого текста
     let tag = parseNnTag(text);
+    let tagSource = 'reply';   // 'reply' — тег от основной модели, 'fallback' — от запасного анализатора
     if (!tag && msg.extra?.nn_tag?.inner && msg.extra.nn_tag.mesHash === hashText(text)) {
         tag = parseNnInner(msg.extra.nn_tag.inner);
+        if (tag && msg.extra.nn_tag.source === 'fallback') tagSource = 'fallback';
     }
     if (!tag) {
         const inner = findNnInner(text, { loose: true });
@@ -875,8 +882,12 @@ function processAiResponse(messageId) {
     }
     if (tag) {
         msg.extra = msg.extra || {};
-        msg.extra.nn_tag = { inner: tag.inner, mesHash: hashText(text) };
+        msg.extra.nn_tag = { inner: tag.inner, mesHash: hashText(text), ...(tagSource === 'fallback' ? { source: 'fallback' } : {}) };
     }
+    // Тега нет — готовим запрос запасному анализатору. Промпт собираем сейчас:
+    // состояние ещё то, что было ДО этого ответа (снимок только что восстановлен).
+    if (tag && analyzing.has(N)) { analyzing.get(N).ctrl?.abort(); analyzing.delete(N); }
+    const fallbackJob = !tag ? prepareFallback(N, text) : null;
     const ctx = newCtx();
 
     // ── Время: tp и time из тега; без тега — условные полчаса ──
@@ -1044,7 +1055,9 @@ function processAiResponse(messageId) {
         }
         if (note) ch.data.foodNote = note;
     }
-    if (state.calibrate?.pending || state.calibrate?.doneAt === N) {
+    // Калибровку засчитываем только по тегу основной модели: ответ без тега
+    // и тег анализатора (он калибровку не делает) оставляют её на следующий ответ
+    if (tag && tagSource === 'reply' && (state.calibrate?.pending || state.calibrate?.doneAt === N)) {
         state.calibrate = { pending: false, doneAt: N };
     }
     if (tag?.userCare) state.user.careLeft = 12;
@@ -1172,6 +1185,112 @@ function processAiResponse(messageId) {
     saveState();
     injectPrompt();
     scheduleRenderAll();
+    if (fallbackJob) runFallback(fallbackJob);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ЗАПАСНОЙ АНАЛИЗАТОР
+// Ответ пришёл без тега → отдельный запрос к модели выбранного профиля восстанавливает тег.
+// Ответ сначала считается как обычно («без тега»), потом — когда тег пришёл — пересчитывается
+// с него (снимок этого сообщения уже есть). Тег кэшируется в msg.extra.nn_tag (source: 'fallback').
+// ═══════════════════════════════════════════════════════════════
+const FALLBACK_TIMEOUT = 90000;
+const FALLBACK_MAX_TOKENS = 600;
+const analyzing = new Map();   // mesId → { ctrl } — идёт запрос, инфоблок показывает анимацию
+const fallbackFailed = new Set();   // хэши текстов, для которых анализатор уже не справился (за сессию)
+let chatEpoch = 0;   // меняется при смене чата
+let genEpoch = 0;    // меняется при каждой настоящей генерации
+
+function fallbackReady() {
+    return isEnabled() && fallbackOn() && profileExists(fallbackProfile());
+}
+
+const cleanForAnalyzer = (t, max = 6000) => {
+    const s = String(t || '').replace(NN_COMMENT_RE, '').trim();
+    return s.length > max ? `…${s.slice(-max)}` : s;
+};
+
+function prepareFallback(N, text) {
+    const msg = chat[N];
+    if (!fallbackReady() || !msg || msg.is_user || msg.is_system || isGreeting(N)) return null;
+    if (N !== lastBotIndex()) return null;
+    const hash = hashText(text);
+    if (fallbackFailed.has(hash)) return null;
+
+    let userText = '';
+    for (let i = N - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (m?.is_user && !m.is_system) { userText = m.mes; break; }
+    }
+    const userName = getUserName(), botName = getBotName();
+    const system = `You fill in a hidden bookkeeping tag for a roleplay nutrition tracker. Read the scene and output exactly one line — the tag — and nothing else: no story, no explanations.
+${buildStatePrompt()}
+
+[Nutrition tag]
+${TAG_TEMPLATE}
+user_ = ${userName} (player). bot_ = ${botName} only — other characters are never tracked. "Your reply" below means ${botName}'s reply shown to you.
+CAPITALS = fill from the scene, copy nothing. Values in the roleplay's language; omit fields that don't apply.
+${tagFieldRules(userName, botName)}
+Answer with the single line <!-- NN … --> only.`;
+    const scene = `${userText ? `[${userName}'s last message]\n${cleanForAnalyzer(userText, 3000)}\n\n` : ''}[${botName}'s reply]\n${cleanForAnalyzer(text)}\n\nWrite the tag for this reply.`;
+    return {
+        N, hash, profileId: fallbackProfile(), chat: chatEpoch, gen: genEpoch,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: scene }],
+    };
+}
+
+function setAnalyzing(N, on) {
+    if (on) analyzing.set(N, analyzing.get(N) || {});
+    else analyzing.delete(N);
+    const block = getMesEl(N)?.querySelector('.nn-ib');
+    if (block) renderBlock(N);
+}
+
+function abortFallbacks() {
+    for (const [N, job] of analyzing) { job.ctrl?.abort(); setAnalyzing(N, false); }
+}
+
+async function runFallback(job) {
+    analyzing.get(job.N)?.ctrl?.abort();
+    const ctrl = new AbortController();
+    analyzing.set(job.N, { ctrl });
+    setAnalyzing(job.N, true);
+    const timer = setTimeout(() => ctrl.abort(), FALLBACK_TIMEOUT);
+    let inner = null;
+    try {
+        const out = await askProfile(job.profileId, job.messages, FALLBACK_MAX_TOKENS, ctrl.signal);
+        inner = parseNnTag(out)?.inner ?? findNnInner(out, { loose: true });
+        if (inner != null && !parseNnInner(inner)) inner = null;
+        if (inner == null) console.warn('[NN] анализатор: в ответе нет тега', out);
+    } catch (e) {
+        if (analyzing.get(job.N)?.ctrl === ctrl) console.warn('[NN] анализатор: ошибка запроса', e);
+    } finally {
+        clearTimeout(timer);
+    }
+    // Запрос отменён или заменён новым (свайп, новая генерация, другой чат) — молча выходим
+    if (analyzing.get(job.N)?.ctrl !== ctrl) return;
+    setAnalyzing(job.N, false);
+    const msg = chat[job.N];
+    const fresh = state && msg && job.chat === chatEpoch && job.gen === genEpoch
+        && job.N === lastBotIndex() && hashText(msg.mes) === job.hash;
+    if (!fresh) return;
+    if (inner == null) { fallbackFailed.add(job.hash); return; }
+
+    msg.extra = msg.extra || {};
+    msg.extra.nn_tag = { inner: String(inner).trim(), mesHash: job.hash, source: 'fallback' };
+    processAiResponse(job.N);   // откат к снимку и пересчёт уже с тегом
+    flashDone(job.N);
+}
+
+function flashDone(N) {
+    setTimeout(() => {
+        const block = getMesEl(N)?.querySelector('.nn-ib');
+        if (!block) return;
+        block.classList.remove('nn-an-done');
+        void block.offsetWidth;
+        block.classList.add('nn-an-done');
+        setTimeout(() => block.classList.remove('nn-an-done'), 1500);
+    }, 90);
 }
 
 function applyProfile(c, p) {
@@ -1581,11 +1700,15 @@ function renderBlock(id) {
     const open = ui.open.has(id) ? ui.open.get(id) : (live && expandLast());
     block.classList.toggle('nn-open', open);
     block.classList.toggle('nn-live', live);
+    const busy = analyzing.has(id);
+    block.classList.toggle('nn-analyzing', busy);
+    if (busy) block.title = 'Анализатор восстанавливает данные по сцене…';
+    else block.removeAttribute('title');
 
     let tab = ui.tab.get(id) || 'overview';
     if (!live && TABS.find(t => t.id === tab)?.live) tab = 'overview';
 
-    block.innerHTML = headHtml(snap, open) + (open ? bodyHtml(snap, live, tab) : '');
+    block.innerHTML = headHtml(snap, open, busy) + (open ? bodyHtml(snap, live, tab) : '');
 }
 
 // ─── Где стоит инфоблок: под текстом или над ним ───
@@ -1704,11 +1827,12 @@ function turnKcal(turn) {
         .reduce((a, x) => a + (x.calories || 0), 0);
 }
 
-function headHtml(snap, open) {
+function headHtml(snap, open, busy = false) {
     // Раскрытый блок: отдельной шапки нет — кнопка «свернуть» стоит в строке вкладок
     if (open) return '';
     return `<div class="nn-head" role="button" tabindex="0" data-act="toggle" aria-expanded="false">
         <span class="nn-people">${personChip(snap.user, 'user')}${snap.bot ? personChip(snap.bot, 'bot') : ''}</span>
+        ${busy ? '<span class="nn-an-badge" aria-label="Анализ"><i class="fa-solid fa-wand-magic-sparkles"></i><span class="nn-an-dots"><i></i><i></i><i></i></span></span>' : ''}
         <i class="fa-solid fa-chevron-down nn-chev"></i>
     </div>`;
 }
@@ -2270,6 +2394,21 @@ function injectSettingsPanel() {
                     ${sw('nn-set-expand', expandLast(), 'Раскрывать в последнем ответе')}
                 </div>
 
+                <div class="nn-set-group nn-an" id="nn-an-group">
+                    <div class="nn-set-title">Анализатор</div>
+                    ${sw('nn-set-fallback', fallbackOn(), 'Восстанавливать тег, если его нет')}
+                    <div class="nn-an-row">
+                        <span class="nn-an-pick">
+                            <span class="nn-an-ico" aria-hidden="true"><i class="fa-solid fa-plug"></i></span>
+                            <select id="nn-an-profile" class="nn-an-select" title="Профиль подключения"></select>
+                            <i class="fa-solid fa-chevron-down nn-an-caret" aria-hidden="true"></i>
+                        </span>
+                        <div id="nn-an-refresh" class="menu_button nn-an-btn" role="button" tabindex="0" title="Обновить список профилей"><i class="fa-solid fa-rotate"></i></div>
+                        <div id="nn-an-check" class="menu_button nn-an-btn" role="button" tabindex="0" title="Проверить подключение"><i class="fa-solid fa-satellite-dish"></i></div>
+                    </div>
+                    <div class="nn-an-status" id="nn-an-status" hidden></div>
+                </div>
+
                 <div class="nn-set-actions">
                     <div id="nn-dbg-clear" class="menu_button" title="Убрать болезни и эффекты, вернуть сытость, воду и силы к норме">
                         <i class="fa-solid fa-broom"></i> Очистить состояния
@@ -2307,6 +2446,7 @@ function injectSettingsPanel() {
                 renderAllBlocks();
             }
         });
+        bindAnalyzerPanel(root);
         root.querySelector('#nn-dbg-clear')?.addEventListener('click', () => {
             if (!state) loadState();
             if (!confirm('Убрать болезни и эффекты и вернуть сытость, воду и силы к норме?')) return;
@@ -2328,6 +2468,116 @@ function injectSettingsPanel() {
     }, 250);
 }
 
+// ─── Анализатор: профиль, обновить, проверить ───
+const anUi = { status: null, statusTimer: null, checking: false };
+
+function anStatus(kind, text, ttl = 0) {
+    const el = document.getElementById('nn-an-status');
+    if (!el) return;
+    clearTimeout(anUi.statusTimer);
+    if (!text) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.dataset.kind = kind;
+    el.innerHTML = `<i class="nn-an-dot"></i><span>${esc(text)}</span>`;
+    if (ttl) anUi.statusTimer = setTimeout(() => fillProfiles(), ttl);
+}
+
+/** Заполняет список профилей из Connection Manager. Возвращает число профилей. */
+function fillProfiles() {
+    const sel = document.getElementById('nn-an-profile');
+    const group = document.getElementById('nn-an-group');
+    if (!sel || !group) return 0;
+    const { status, profiles } = cmProfiles();
+    const cur = fallbackProfile();
+    sel.textContent = '';
+    const add = (parent, value, label) => {
+        const o = document.createElement('option');
+        o.value = value; o.textContent = label;
+        parent.appendChild(o);
+        return o;
+    };
+    if (status !== 'ok') {
+        add(sel, '', status === 'off' ? 'Connection Manager выключен' : 'Нет профилей');
+        sel.disabled = true;
+    } else {
+        sel.disabled = false;
+        add(sel, '', 'Выберите профиль');
+        const groups = new Map();
+        for (const p of profiles) {
+            if (!groups.has(p.group)) {
+                const g = document.createElement('optgroup');
+                g.label = p.group || 'Профили';
+                groups.set(p.group, g);
+                sel.appendChild(g);
+            }
+            add(groups.get(p.group), p.id, p.name);
+        }
+        if (cur && !profiles.some(p => p.id === cur)) add(sel, cur, 'Профиль удалён').disabled = true;
+    }
+    sel.value = cur && [...sel.options].some(o => o.value === cur) ? cur : '';
+    const has = status === 'ok' && profileExists(cur);
+    group.classList.toggle('nn-an-on', fallbackOn());
+    group.classList.toggle('nn-an-has', has);
+    document.getElementById('nn-an-check')?.classList.toggle('disabled', !has);
+
+    // Иконка модели выбранного профиля (если таверна умеет), иначе вилка
+    const ico = group.querySelector('.nn-an-ico');
+    if (ico) {
+        const img = has ? profileIcon(cur) : null;
+        ico.textContent = '';
+        if (img) { img.classList.add('nn-an-model'); ico.appendChild(img); }
+        else ico.innerHTML = '<i class="fa-solid fa-plug"></i>';
+    }
+
+    if (status === 'off') anStatus('bad', 'Включите Connection Manager в расширениях');
+    else if (status === 'empty') anStatus('warn', 'Создайте профиль в Connection Manager');
+    else if (cur && !has) anStatus('warn', 'Выбранного профиля больше нет');
+    else if (fallbackOn() && !cur) anStatus('warn', 'Выберите профиль');
+    else anStatus('', '');
+    return profiles.length;
+}
+
+async function checkAnalyzer() {
+    const id = fallbackProfile();
+    if (anUi.checking || !profileExists(id)) return;
+    anUi.checking = true;
+    const btn = document.getElementById('nn-an-check');
+    btn?.classList.add('nn-an-busy');
+    anStatus('wait', 'Проверяю…');
+    const r = await checkProfile(id);
+    anUi.checking = false;
+    btn?.classList.remove('nn-an-busy');
+    if (r.ok) anStatus('good', `Связь есть · ${(r.ms / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} с`, 6000);
+    else anStatus('bad', `Нет связи: ${r.error}`);
+}
+
+function bindAnalyzerPanel(root) {
+    fillProfiles();
+    setTimeout(fillProfiles, 1500);   // Connection Manager мог подгрузиться позже панели
+    root.querySelector('#nn-set-fallback')?.addEventListener('change', e => {
+        localStorage.setItem(LS.fallback, e.target.checked ? 'true' : 'false');
+        if (!e.target.checked) abortFallbacks();
+        fillProfiles();
+    });
+    root.querySelector('#nn-an-profile')?.addEventListener('change', e => {
+        localStorage.setItem(LS.fallbackProfile, e.target.value);
+        fallbackFailed.clear();
+        fillProfiles();
+    });
+    const press = (sel, fn) => {
+        const el = root.querySelector(sel);
+        el?.addEventListener('click', fn);
+        el?.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); } });
+    };
+    press('#nn-an-refresh', () => {
+        const btn = root.querySelector('#nn-an-refresh');
+        btn.classList.remove('nn-an-spin'); void btn.offsetWidth; btn.classList.add('nn-an-spin');
+        const n = fillProfiles();
+        if (cmProfiles().status === 'ok') anStatus('good', `Профилей: ${n}`, 2500);
+    });
+    press('#nn-an-check', checkAnalyzer);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // СОБЫТИЯ ТАВЕРНЫ
 // ═══════════════════════════════════════════════════════════════
@@ -2338,6 +2588,8 @@ function onGenerationStarted(type, params, dryRun) {
     generating = true;
     if (!isEnabled()) return;
     if (!state) loadState();
+    // Настоящая генерация (не фоновая quiet от других расширений) делает запросы анализатора устаревшими
+    if (type !== 'quiet') { genEpoch++; abortFallbacks(); }
     const regen = ['swipe', 'regenerate', 'continue'].includes(type);
     calibrateNow = !!state.calibrate?.pending || (regen && state.calibrate?.doneAt === lastBotIndex());
     injectPrompt();
@@ -2378,6 +2630,8 @@ function onMessageEdited(id) {
 }
 
 function onChatChanged() {
+    chatEpoch++;
+    abortFallbacks();
     ui.open.clear();
     ui.tab.clear();
     loadState();
@@ -2448,6 +2702,10 @@ function init() {
     on(event_types.MESSAGE_DELETED, onMessageDeleted);
     on(event_types.MORE_MESSAGES_LOADED, scheduleRenderAll);
     on(event_types.CHAT_CHANGED, onChatChanged);
+    // Профили создали, переименовали или удалили — список в панели обновляется сам
+    for (const e of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_DELETED', 'CONNECTION_PROFILE_UPDATED']) {
+        on(event_types[e], () => setTimeout(fillProfiles, 50));
+    }
 
     observeChat();
     for (const ms of [300, 1000]) setTimeout(renderAllBlocks, ms);
