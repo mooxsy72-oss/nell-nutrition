@@ -329,6 +329,7 @@ export function grantEffect(c, id, hoursLeft, added = [], detail = null) {
     if (ex) {
         ex.fading = true;
         ex.fadeLeft = Math.max(ex.fadeLeft || 0, hoursLeft);
+        delete ex.bornTurn;   // повтор события — отсчёт ответов заново (см. expireByTurns в index.js)
         if (detail) ex.detail = detail;
         return;
     }

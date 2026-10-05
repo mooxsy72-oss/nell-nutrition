@@ -909,6 +909,9 @@ function evaluateEffects(c, hours, added, removed) {
     c.buffs = c.buffs.filter(b => b.id !== 'high_energy');
     // Сытость уходит сразу, как только снова проголодался
     if (c.satiety < 50) c.buffs = c.buffs.filter(b => b.id !== 'well_fed');
+    // «Напился вдоволь» и «выспался» тоже не держатся, когда показатель уже ушёл
+    if (c.water < 60) c.buffs = c.buffs.filter(b => b.id !== 'hydrated');
+    if (c.energy < 45 || hasEffect(c, 'sleep_deprived') || hasEffect(c, 'exhaustion')) c.buffs = c.buffs.filter(b => b.id !== 'rested');
 
     // Беременность: со второго триместра голод просыпается раньше — но эффект только когда правда голодна
     const pw = c.pregnant ? (c.pregnancyWeek || 0) : 0;

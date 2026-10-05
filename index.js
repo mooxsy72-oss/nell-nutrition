@@ -11,7 +11,7 @@ import { power_user } from '../../../../scripts/power-user.js';
 
 import {
     tickTime, applyMeal, applyDrink, applyVomit, goalOf, changeWeight, bankFat, KCAL_PER_KG,
-    burnPerHour, setSatiety, gutFor,
+    burnPerHour, setSatiety,
 } from './nutrition-engine.js';
 import { parseNnTag, parseNnInner, findNnInner, MAX_HOURS } from './parser.js';
 import {
@@ -371,18 +371,21 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
     setEffectsMode(isHard());
     setEra(isHistorical() ? 'historical' : 'modern');
     if (state.clockHours == null) state.clockHours = 12;
-    // Пропуск от 6 часов проживается по распорядку, шагами по часу
-    // Явный скип или долгий отрезок проживается по распорядку, шагами по часу
+    // Явный скип или долгий отрезок проживается по распорядку, шагами по часу: ночью спят, пьют по жажде.
+    // Едят за кадром только на ЯВНОМ скипе (skip= или сутки и больше). Ночь, дорога, «прошло полдня»
+    // без skip= — еды нет: что съели в сцене, модель пишет в _ate (раньше ночь tp=9 давала «завтрак»).
     const routine = declaredSkip || hours >= 6;
+    const feedRoutine = declaredSkip;
     const opts = { healthFloor: isHard() ? null : 25 };
     let left = hours;
     // Если ИИ сам записал еду в конце отрезка, последний обед по распорядку и есть она —
     // его пропускаем, чтобы не посчитать дважды
     // На скипе еда в теге — это уже сцена после него: заменяет обед, только если тот был в последние 3 часа
     const endAt = state.clockHours + hours;
-    const lastMealAt = routine ? lastRoutineMeal(state.clockHours, endAt) : null;
+    const lastMealAt = feedRoutine ? lastRoutineMeal(state.clockHours, endAt) : null;
     const nearEnd = lastMealAt != null && endAt - lastMealAt <= 3;
-    const skipLast = { user: loggedMeal.user && (!declaredSkip || nearEnd), bot: loggedMeal.bot && (!declaredSkip || nearEnd) };
+    const skipLast = { user: loggedMeal.user && nearEnd, bot: loggedMeal.bot && nearEnd };
+    const routineKcal = { user: 0, bot: 0 };
     ctx.slept = { user: 0, bot: 0 };
     ctx.woke = { user: false, bot: false };
     ctx.endedAsleep = sleeping;
@@ -403,7 +406,7 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
             if (asleep) ctx.slept[ch.who] += step;
             else if (ctx.slept[ch.who] > 0) ctx.woke[ch.who] = true;
 
-            if (routine && fedOf[ch.who]) {
+            if (feedRoutine && fedOf[ch.who]) {
                 // За кадром едят ровно столько, сколько тратят: без голода вес на пропусках
                 // не уходит (у беременной растёт только за счёт беременности)
                 const dayTarget = burnPerHour(c, activityOf[ch.who]) * 16 + burnPerHour(c, 'low', true) * 8;
@@ -419,6 +422,7 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                     const portion = dayTarget * share * fedOf[ch.who];
                     applyMeal(c, portion, 8, g);
                     markMeal(c, portion, at);
+                    routineKcal[ch.who] += portion;
                     // Обычный обед по распорядку — не обжорство
                     c.recentIntake = Math.min(c.recentIntake || 0, g * 0.4);
                     c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
@@ -443,7 +447,10 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
         for (const ch of chars) advancePregnancy(ch.data);
         const newDay = Math.floor(state.clockHours / 24);
         for (let d = prevDay + 1; d <= newDay; d++) {
-            for (const ch of chars) rolloverDay(ch, d, ctx);
+            for (const ch of chars) {
+                console.log(`[NN] полночь → день ${d + 1}: ${ch.who} съел(а) ${r0(ch.data.calories)} ккал, сжёг(ла) ${r0(ch.data.burned)}`);
+                rolloverDay(ch, d, ctx);
+            }
         }
 
         for (const ch of chars) {
@@ -452,6 +459,8 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
         }
         ctx.endedAsleep = asleep;
     }
+    ctx.routineKcal = routineKcal;
+    if (feedRoutine) console.log('[NN] еда за кадром (распорядок):', Object.fromEntries(chars.map(ch => [ch.who, r0(routineKcal[ch.who])])), 'ккал за', hours, 'ч');
 }
 
 // Абсолютное время последнего обеда по распорядку на отрезке (from, to]
@@ -466,20 +475,62 @@ function lastRoutineMeal(from, to) {
     return last;
 }
 
-// Сверяем внутренние часы с временем из ролплея (тег time=)
-function alignClock(tagClock, hours) {
+// Сверяем внутренние часы с временем из ролплея (тег time=).
+// Часы никогда не идут назад через полночь (иначе полночь пройдёт второй раз: двойной итог дня,
+// обнулённые калории). Правила:
+//   • есть tp — берём ближайшее к «часы + tp» вхождение time=;
+//   • нет tp — время идёт вперёд, если переход через полночь не длиннее 14 ч
+//     (19:00 → 08:00 — это ночь, а не «на 11 часов назад»), или если был сон / сменилась дата;
+//   • time= чуть позади (до 3 ч) или повторяется — часы стоят, но tp всё же идёт:
+//     иначе модель, повторяющая одно time=, замораживает время, и эффекты с таймером не проходят.
+//     Уход вперёд ограничен самим tp, так что часы не убегают от сюжета;
+//   • time= сильно позади — переставляем часы назад, но не раньше начала текущего игрового дня.
+const MAX_BACK_HOLD = 3;
+function rpDayNum(date) {
+    const m = String(date || '').match(/\d{1,2}/);
+    return m ? Number(m[0]) : null;
+}
+function alignClock(tagClock, hours, opts = {}) {
     const before = state.clockHours ?? 12;
-    if (tagClock == null) return hours;
-    const predicted = before + (hours ?? 0);
-    let cand = Math.floor(predicted / 24) * 24 + tagClock;
-    if (cand - predicted > 12) cand -= 24;
-    if (predicted - cand > 12) cand += 24;
-    if (cand < before) {
-        // Время из ролплея раньше наших часов — просто переставляем часы
-        state.clockHours = cand;
-        return 0;
+    if (tagClock == null) return hours ?? 0;
+    const tp = hours;   // null — модель не дала ни tp, ни skip
+    const hourNow = ((before % 24) + 24) % 24;
+    const back = ((hourNow - tagClock) % 24 + 24) % 24;          // на сколько time= позади часов (0…24)
+    const fwd = back === 0 ? 0 : 24 - back;                       // или вперёд до ближайшего такого времени
+    const dayStart = Math.floor(before / 24) * 24;
+    const crossesMidnight = Math.floor((before + fwd) / 24) > Math.floor(before / 24);
+    let out;
+    if (tp != null) {
+        const predicted = before + tp;
+        let cand = Math.floor(predicted / 24) * 24 + tagClock;
+        if (cand - predicted > 12) cand -= 24;
+        if (predicted - cand > 12) cand += 24;
+        out = cand - before;
+    } else if (back === 0) {
+        out = 0;
+    } else if (opts.dateChanged || (opts.sleeping && back > MAX_BACK_HOLD) || (crossesMidnight && fwd <= 14) || back > 12) {
+        out = fwd;
+    } else {
+        out = -back;
     }
-    return cand - before;
+    if (Math.abs(out) < 1 / 60) out = 0;   // в пределах минуты — то же время (часы копят дробные хвосты)
+    if (out < 0) {
+        const b = -out;
+        if (b <= MAX_BACK_HOLD) {
+            out = Math.max(0, (tp ?? 0) - b);
+        } else {
+            state.clockHours = Math.max(dayStart, before - b);
+            console.log(`[NN] time= позади на ${b.toFixed(1)} ч — часы назад (не раньше начала дня)`);
+            out = 0;
+        }
+    } else if (out === 0 && tp > 0) {
+        out = tp;   // то же time=, но tp есть — время всё равно идёт
+    }
+    // Сменилась дата, а полночь не пройдена — значит, прошли сутки и больше
+    // (только без tp: явный tp важнее — модель могла просто поправить дату)
+    const cur = state.clockHours ?? before;
+    if (opts.dateChanged && tp == null && Math.floor((cur + out) / 24) === Math.floor(cur / 24)) out += 24;
+    return out;
 }
 
 // Прибавка веса за беременность (ребёнок, плацента, жидкость, запасы):
@@ -683,7 +734,7 @@ function consume(ch, foods, drinks, ctx) {
         const water = Math.min(60, foods.reduce((a, f) => a + (f.water || 0), 0));
         applyMeal(c, sumCal(foods), water, g, { greedy: foods.some(f => f.manner === 'greedy') });
         markMeal(c, sumCal(foods));
-        addToHistory(ch.who, foods.map(f => f.item), sumCal(foods));
+        addToHistory(ch.who, foods.map(f => f.item), sumCal(foods), foods);
     }
     for (const d of drinks) {
         const extras = d.alcoholG != null ? d : drinkExtras(d.item, d.ml || 250);
@@ -706,7 +757,8 @@ function makeFoodNote(c, foods, drinks, why) {
         parts.push(`${parts.length ? w : w[0].toUpperCase() + w.slice(1)}: ${drinks.map(item).join('; ')}`);
     }
     if (parts.length) return { kind: 'ate', text: parts.join(' · '), clock: state.clockHours };
-    if (why) return { kind: 'why', text: why[0].toUpperCase() + why.slice(1), clock: state.clockHours };
+    const fromWhy = foods.find(f => f.fromWhy);
+    if (why) return { kind: 'why', text: why[0].toUpperCase() + why.slice(1) + (fromWhy ? ` · засчитано ~${r0(fromWhy.calories)} ккал (со слов)` : ''), clock: state.clockHours };
     return null;
 }
 
@@ -733,9 +785,26 @@ function markMeal(c, kcal, clock = state.clockHours) {
     if (s) mealsOf(c, clock).done[s.id] = true;
 }
 
-function addToHistory(who, items, calories) {
-    state.history.push({ who, items, calories: r0(calories), clock: state.clockHours, timestamp: Date.now() });
+function addToHistory(who, items, calories, foods = []) {
+    state.history.push({
+        who, items, calories: r0(calories), clock: state.clockHours, turn: state.turn, timestamp: Date.now(),
+        kcals: foods.map(f => r0(f.calories)), src: foods.map(f => (f.fromWhy ? 'why' : 'tag')),
+    });
     if (state.history.length > 40) state.history = state.history.slice(-40);
+}
+
+const MORE_RE = /(ещё|еще|втор|добав|снова|опять|another|second|more|again|seconds)/i;
+function dropRepeats(who, foods) {
+    if (!foods.length) return foods;
+    const prev = state.history.filter(h => h.who === who && h.turn === state.turn - 1 && Array.isArray(h.kcals));
+    if (!prev.length) return foods;
+    return foods.filter(f => {
+        if (MORE_RE.test(`${f.item} ${f.mannerLabel || ''}`)) return true;
+        const dup = prev.some(h => h.items.some((it, i) => sameFood(it, f.item)
+            && Math.abs((h.kcals[i] || 0) - (f.calories || 0)) <= Math.max(20, (f.calories || 0) * 0.15)));
+        if (dup) console.log(`[NN] ${who}: «${f.item}» ${f.calories} ккал — повтор еды из прошлого ответа, не считаю`);
+        return !dup;
+    });
 }
 
 function lastProcessedMsg() {
@@ -789,7 +858,10 @@ const WHY_NOT_RE = /(?:не|ещё не|еще не|ни разу не)\s+(?:п�
 function foodFromWhy(why, c) {
     const t = String(why || '').trim();
     if (!t || !WHY_ATE_RE.test(t) || WHY_NOT_RE.test(t)) return null;
-    if ((c.hoursSinceLastMeal ?? 99) < 2) return null;   // уже учтено (распорядок или прошлый тег)
+    if ((c.hoursSinceLastMeal ?? 99) < 3) return null;   // уже учтено (распорядок или прошлый тег)
+    // Та же фраза, что уже засчитана раньше («уже поел каши» из хода в ход) — не новая еда
+    const key = t.toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\d]+/gu, ' ').trim();
+    if (c.whyAteKey === key) return null;
     const m = t.match(WHY_ATE_RE);
     let item = t.slice((m.index || 0) + m[0].length).split(/[,;.]/)[0].replace(/^\s*(уже|немного|чуть)\s+/i, '').trim();
     if (!item || item.length > 40 || /^(до|досыта|плотно|сытно|вдоволь|—|-)/i.test(item)) item = 'еда';
@@ -797,7 +869,7 @@ function foodFromWhy(why, c) {
     const big = /(до отвала|досыта|плотно|сытно|наел)/i.test(t);
     const g = effectiveGoal(c);
     const kcal = small ? 200 : big ? 700 : Math.max(300, Math.min(650, Math.round(g * 0.2 / 50) * 50));
-    return { item, calories: kcal, water: 0, implied: true, fromWhy: true };
+    return { item, calories: kcal, water: 0, implied: true, fromWhy: true, whyKey: key };
 }
 
 // ─── Самочувствие не должно спорить с состоянием ───
@@ -842,6 +914,28 @@ function checkWeightNotice(c) {
     if (Math.abs(d) >= 0.5) {
         c.weightNote = { delta: Math.round(d * 10) / 10, weight: Math.round(c.weight * 10) / 10, turn: state.turn };
         c.weightNoted = c.weight;
+    }
+}
+
+// Короткие эффекты-события (выспался, сытно поел, любимое блюдо…) живут 2–4 игровых часа.
+// Но разговор — это ~0,1 ч на ответ, и такие эффекты висели десятками ответов. Поэтому у них
+// есть и предел по ответам: что раньше закончится — игровые часы или ответы.
+const EVENT_TURN_CAP = {
+    rested: 10, well_fed: 8, hydrated: 6, favorite_food: 6, disliked_food: 6, warmed: 6,
+    sugar_crash: 6, heartburn: 8,
+};
+function expireByTurns(ch, ctx) {
+    const c = ch.data;
+    for (const list of ['buffs', 'debuffs']) {
+        c[list] = c[list].filter(e => {
+            if (e.bornTurn == null) e.bornTurn = state.turn;
+            const cap = EVENT_TURN_CAP[e.id];
+            if (!cap || state.turn - e.bornTurn < cap) return true;
+            console.log(`[NN] ${ch.who}: эффект «${e.id}» снят — прошло ${state.turn - e.bornTurn} ответов`);
+            ctx[ch.who].added.delete(e.id);
+            ctx[ch.who].removed.add(e.id);
+            return false;
+        });
     }
 }
 
@@ -897,7 +991,12 @@ function processAiResponse(messageId) {
     let declaredSkip = tag?.skip != null && tag.skip > 0;
     let hours = tag ? (declaredSkip ? tag.skip : (tag.tp ?? (tag.clock != null ? null : 0))) : 0;
     state.missedTag = tag ? 0 : (state.missedTag || 0) + 1;
-    hours = tag ? alignClock(tag.clock, hours) : hours;
+    const clockBefore = state.clockHours ?? 12;
+    if (tag) {
+        const dPrev = rpDayNum(state.rpDate), dNew = rpDayNum(tag.date);
+        const dateChanged = dPrev != null && dNew != null && dPrev !== dNew;
+        hours = alignClock(tag.clock, hours, { sleeping: !!tag.sleeping, dateChanged });
+    }
     hours = Math.max(0, Math.min(MAX_HOURS, hours || 0));
     // Сутки и больше за один ответ — это скип, даже если ИИ написал tp, а не skip
     if (hours >= 24) declaredSkip = true;
@@ -928,6 +1027,16 @@ function processAiResponse(messageId) {
     const userDrink = tag ? (tag.userDrank.length ? tag.userDrank : tag.drank) : [];
     let botFood = tag && bot ? tag.botAte : [];
     const botDrink = tag && bot ? tag.botDrank : [];
+
+    // Модель повторила еду прошлого ответа (то же блюдо, те же калории, время почти не прошло) —
+    // это не новая порция. «Ещё одна», «вторая», «добавка» в манере — новая, её оставляем.
+    {
+        const hrsHint = tag ? (tag.skip ?? tag.tp ?? 0) : 0;
+        if (hrsHint <= 1) {
+            userFood = dropRepeats('user', userFood);
+            botFood = dropRepeats('bot', botFood);
+        }
+    }
 
     // Потолок съеденного за ответ: модель иногда «вспоминает» еду и резко добавляет её разом.
     // Больше, чем можно реально съесть за прошедшее время, не засчитываем (на скипе — свободно).
@@ -974,21 +1083,20 @@ function processAiResponse(messageId) {
         const full = rawFull[ch.who];
         if (full == null) continue;
         const c = ch.data;
-        if (foodsFor[ch.who].length || drankFor[ch.who].length) { fullOf[ch.who] = full; continue; }
-        // Еды в теге нет, но сытость резко выросла — значит, поели, а блюдо не названо
-        if (full >= c.satiety + 30) {
-            fullOf[ch.who] = full;
-            const g = effectiveGoal(c);
-            const kcal = Math.round(Math.min(g * 0.4, Math.max(0, gutFor(c, full, g) - (c.gut || 0))));
-            if (kcal >= 100) foodsFor[ch.who] = [{ item: 'еда', calories: kcal, water: 0, implied: true }];
-        }
+        // Еды в теге нет — _full не трогаем и еду по нему не «угадываем»: модель повторяет
+        // цифру по инерции, и раньше отсюда брались калории, которых никто не ел
+        if (foodsFor[ch.who].length || drankFor[ch.who].length) fullOf[ch.who] = full;
     }
     // Еда, упомянутая только в _why («уже поел каши») — модель забыла _ate
     for (const ch of chars) {
         if (foodsFor[ch.who].length) continue;
         const why = ch.who === 'user' ? tag?.userWhy : tag?.botWhy;
         const f = foodFromWhy(why, ch.data);
-        if (f) foodsFor[ch.who] = [f];
+        if (f) {
+            foodsFor[ch.who] = [f];
+            ch.data.whyAteKey = f.whyKey;
+            console.log(`[NN] ${ch.who}: еда из _why «${why}» → ~${f.calories} ккал`);
+        }
     }
     userFood = foodsFor.user;
     botFood = foodsFor.bot;
@@ -1050,7 +1158,7 @@ function processAiResponse(messageId) {
     const drinksFor = { user: userDrink, bot: botDrink };
     for (const ch of chars) {
         let note = makeFoodNote(ch.data, foodsFor[ch.who], drinksFor[ch.who], whyOf[ch.who]);
-        if (!note && fedOf[ch.who] && (declaredSkip || hours >= 6)) {
+        if (!note && fedOf[ch.who] && declaredSkip) {
             note = { kind: 'off', text: ch.data.gender === 'female' ? 'Ела как обычно, за кадром' : ch.data.gender === 'male' ? 'Ел как обычно, за кадром' : 'Ели как обычно, за кадром' };
         }
         if (note) ch.data.foodNote = note;
@@ -1142,6 +1250,7 @@ function processAiResponse(messageId) {
     }
 
     for (const ch of chars) mergeCond(ctx, ch.who, evaluateConditions(ch.data, 0));
+    for (const ch of chars) expireByTurns(ch, ctx);
 
     // Заметная перемена веса — один раз сообщаем ИИ (в следующем ответе)
     for (const ch of chars) {
@@ -1172,7 +1281,7 @@ function processAiResponse(messageId) {
                 Math.floor(state.clockHours / 24) === dayBefore
                     ? r0((ch.data.burned || 0) - burnedBefore[ch.who])
                     : r0(burnPerHour(ch.data, activityOf[ch.who], sleeping) * hours)])),
-            offscreen: hours >= 6 && (fedOf.user || fedOf.bot),
+            offscreen: declaredSkip && !!(fedOf.user || fedOf.bot),
             weightDelta: {
                 user: +(state.user.weight - weightBefore.user).toFixed(3),
                 bot: bot ? +(bot.weight - (weightBefore.bot ?? bot.weight)).toFixed(3) : 0,
@@ -1181,6 +1290,19 @@ function processAiResponse(messageId) {
             botFood: slimItems(botFood), botDrink: slimItems(botDrink),
         },
     };
+
+    // Лог хода — чтобы воспроизводить жалобы на учёт (F12 → консоль, фильтр [NN])
+    console.log(`[NN] ход ${state.turn} (#${N}, тег: ${tag ? tagSource : 'нет'})`, {
+        tag: tag?.inner ?? null,
+        clock: `${clockLabel(clockBefore)} ${hourOf(clockBefore).toFixed(2)} → ${clockLabel(state.clockHours)} ${hourOf(state.clockHours).toFixed(2)}`,
+        hours: +hours.toFixed(2), skip: declaredSkip,
+        kcal: Object.fromEntries(chars.map(ch => [ch.who, {
+            tag: r0(sumCal(ch.who === 'user' ? userFood : botFood)),
+            routine: r0(ctx.routineKcal?.[ch.who] || 0),
+            day: r0(ch.data.calories),
+        }])),
+        effects: Object.fromEntries(chars.map(ch => [ch.who, [...ch.data.buffs, ...ch.data.debuffs].map(e => e.id)])),
+    });
 
     saveState();
     injectPrompt();
@@ -1513,7 +1635,7 @@ function tagFieldRules(userName, botName) {
     const u = state.user, b = getBotState();
     const preg = [pregQuestion(u, userName, 'user'), pregQuestion(b, botName, 'bot')].filter(Boolean);
     return [
-        `• tp = in-world hours since your last reply (talk 0.1, a meal 0.5, a night 8); time = clock now. sleeping=true if they slept through most of that span — also on the reply where they wake. A jump ("a week later", *skip*) → skip=DURATION; off-screen meals and sleep are automatic.`,
+        `• tp = in-world hours since your last reply (talk 0.1, a meal 0.5, a night 8); time = clock now. sleeping=true if they slept through most of that span — also on the reply where they wake. A jump ("a week later", *skip*) → skip=DURATION; off-screen meals and sleep are automatic. Without skip= nobody eats off-screen: a meal mentioned after a night or a time jump (\"после завтрака\") goes in _ate.`,
         `• _activity, always both: low (sit, talk, eat, rest) | medium (walk, chores, cook, ride) | high (run, fight, haul, heavy work).`,
         `• _ate = everything eaten in ${userName}'s last message and your reply, each as a new portion — passing mentions too ("перекусили по дороге", "после ужина"), and a second meal right after the first. Earlier tags are already counted: never drop something because it looks like an earlier entry, but never re-log food eaten before — licking fingers, an aftertaste, a full belly or remembering the meal is not new eating. Same bite in both messages → once. FOOD (HOW):KCAL — HOW = how much and how, a few words ("всю миску", "пару ложек через силу"); KCAL = a quick round guess, no arithmetic (a taste or lick 10, bread slice 100, porridge 350, pie slice 350, soup with bread 450, stew 700, feast 1000+). Nothing eaten → omit; never "ничего"/0.`,
         `• _drank — same rule: DRINK (HOW):ML:KCAL (sip 30, cup 250, mug 350, pint 500); KCAL only if caloric; drinks never in _ate.`,
