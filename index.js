@@ -1195,7 +1195,7 @@ function processAiResponse(messageId) {
 // с него (снимок этого сообщения уже есть). Тег кэшируется в msg.extra.nn_tag (source: 'fallback').
 // ═══════════════════════════════════════════════════════════════
 const FALLBACK_TIMEOUT = 90000;
-const FALLBACK_MAX_TOKENS = 600;
+const FALLBACK_MAX_TOKENS = 1000;   // с запасом для моделей с рассуждениями
 const analyzing = new Map();   // mesId → { ctrl } — идёт запрос, инфоблок показывает анимацию
 const fallbackFailed = new Set();   // хэши текстов, для которых анализатор уже не справился (за сессию)
 let chatEpoch = 0;   // меняется при смене чата
@@ -1205,10 +1205,44 @@ function fallbackReady() {
     return isEnabled() && fallbackOn() && profileExists(fallbackProfile());
 }
 
+// Длинный текст режем посередине: начало (еда в завязке сцены) и конец (чем всё кончилось) важнее
 const cleanForAnalyzer = (t, max = 6000) => {
     const s = String(t || '').replace(NN_COMMENT_RE, '').trim();
-    return s.length > max ? `…${s.slice(-max)}` : s;
+    if (s.length <= max) return s;
+    const head = Math.round(max * 0.4);
+    return `${s.slice(0, head).trimEnd()}\n[…]\n${s.slice(s.length - (max - head)).trimStart()}`;
 };
+
+// Тег предыдущего учтённого ответа — образец формата и опора для time/date
+function previousTagLine(N) {
+    for (let i = N - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (!m || m.is_user || m.is_system) continue;
+        const inner = m.extra?.nn_tag?.inner ?? parseNnTag(m.mes)?.inner;
+        if (inner) return `<!-- NN ${String(inner).trim()} -->`;
+    }
+    return '';
+}
+
+/**
+ * Достаёт тег из ответа анализатора. Закрытый тег берём как есть. Незакрытый (ответ обрезан
+ * по лимиту) — без последнего поля: оно могло оборваться посреди значения. Без времени — не тег.
+ */
+function extractAnalyzerTag(out) {
+    let inner = parseNnTag(out)?.inner ?? null;
+    if (inner == null) {
+        const loose = findNnInner(out, { loose: true });
+        if (loose == null) return null;
+        const parts = String(loose).split('|');
+        if (parts.length < 2) return null;
+        inner = parts.slice(0, -1).join('|');
+        console.warn('[NN] анализатор: тег не закрыт — последнее поле отброшено');
+    }
+    inner = String(inner).trim();
+    const tag = parseNnInner(inner);
+    if (!tag || (tag.tp == null && tag.clock == null && tag.skip == null)) return null;
+    return inner;
+}
 
 function prepareFallback(N, text) {
     const msg = chat[N];
@@ -1223,6 +1257,7 @@ function prepareFallback(N, text) {
         if (m?.is_user && !m.is_system) { userText = m.mes; break; }
     }
     const userName = getUserName(), botName = getBotName();
+    const prev = previousTagLine(N);
     const system = `You fill in a hidden bookkeeping tag for a roleplay nutrition tracker. Read the scene and output exactly one line — the tag — and nothing else: no story, no explanations.
 ${buildStatePrompt()}
 
@@ -1230,8 +1265,10 @@ ${buildStatePrompt()}
 ${TAG_TEMPLATE}
 user_ = ${userName} (player). bot_ = ${botName} only — other characters are never tracked. "Your reply" below means ${botName}'s reply shown to you.
 CAPITALS = fill from the scene, copy nothing. Values in the roleplay's language; omit fields that don't apply.
-${tagFieldRules(userName, botName)}
-Answer with the single line <!-- NN … --> only.`;
+${tagFieldRules(userName, botName)}${prev ? `
+Previous reply's tag — already counted; follow its format and continue its time and date, never repeat its food or drinks:
+${prev}` : ''}
+Answer with the single line <!-- NN … --> only, closed with -->.`;
     const scene = `${userText ? `[${userName}'s last message]\n${cleanForAnalyzer(userText, 3000)}\n\n` : ''}[${botName}'s reply]\n${cleanForAnalyzer(text)}\n\nWrite the tag for this reply.`;
     return {
         N, hash, profileId: fallbackProfile(), chat: chatEpoch, gen: genEpoch,
@@ -1259,8 +1296,7 @@ async function runFallback(job) {
     let inner = null;
     try {
         const out = await askProfile(job.profileId, job.messages, FALLBACK_MAX_TOKENS, ctrl.signal);
-        inner = parseNnTag(out)?.inner ?? findNnInner(out, { loose: true });
-        if (inner != null && !parseNnInner(inner)) inner = null;
+        inner = extractAnalyzerTag(out);
         if (inner == null) console.warn('[NN] анализатор: в ответе нет тега', out);
     } catch (e) {
         if (analyzing.get(job.N)?.ctrl === ctrl) console.warn('[NN] анализатор: ошибка запроса', e);
