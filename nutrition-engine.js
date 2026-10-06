@@ -199,18 +199,14 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     const calBurn = burnPerHour(charData, level, sleeping) * hours;
     charData.burned = (charData.burned || 0) + calBurn;
     const reserve = charData.reserve ?? dailyGoal * 0.5;
-    // Запаса не хватило — остаток сжигается из жира
-    const fromFat = Math.max(0, calBurn - reserve);
+    // Запас — только для гипогликемии и голодания. На вес он не влияет:
+    // вес считается в полночь по балансу «съедено − сожжено» (settleDayFat в index.js)
     charData.reserve = Math.max(0, reserve - calBurn);
-    if (fromFat > 0) bankFat(charData, -fromFat / KCAL_PER_KG);
     // Пока без еды меньше 14 ч, организм добирает нехватку из жира и держит
     // небольшой запас — гипогликемия бывает только при настоящем голодании
     if ((charData.hoursSinceLastMeal || 0) < 14) {
         const floor = dailyGoal * 0.15;
-        if (charData.reserve < floor) {
-            bankFat(charData, -(floor - charData.reserve) / KCAL_PER_KG);
-            charData.reserve = floor;
-        }
+        if (charData.reserve < floor) charData.reserve = floor;
     }
 
     // Недавно съеденное «переваривается» (период полураспада ~2ч)
@@ -336,9 +332,9 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 // ВЕС
-// Запас энергии (reserve) работает как буфер: обычное питание его
-// колеблет, не трогая вес. Всё, что не влезло в полный запас,
-// откладывается в вес; всё, что сожжено при пустом запасе, уходит из веса.
+// Вес меняется в полночь по балансу дня «съедено − сожжено» (settleDayFat в index.js).
+// Запас энергии (reserve) — отдельно, для гипогликемии и голодания; на вес не влияет.
+// fatLedger — только добавочные потери (вода и мышцы при полном голоде).
 // ═══════════════════════════════════════════════════════════════
 export function reserveCap(goal) { return goal * 1.25; }
 
@@ -347,25 +343,14 @@ export function changeWeight(charData, kg) {
     charData.weight = Math.max(30, Math.round(((charData.weight || 65) + kg) * 1000) / 1000);
 }
 
-/**
- * Жир от баланса калорий копится за игровой день и списывается в полночь
- * (settleDayFat в index.js): так недоигранный день — утро и сразу скип —
- * не превращается в потерю веса, если персонаж не ложился голодным.
- */
+/** Добавочная потеря веса за день (полный голод) — списывается в полночь вместе с балансом */
 export function bankFat(charData, kg) {
     if (!kg) return;
     charData.fatLedger = (charData.fatLedger || 0) + kg;
 }
 
 function storeEnergy(charData, kcal, goal) {
-    const cap = reserveCap(goal);
-    const next = (charData.reserve || 0) + kcal;
-    if (next > cap) {
-        bankFat(charData, (next - cap) / KCAL_PER_KG);
-        charData.reserve = cap;
-    } else {
-        charData.reserve = next;
-    }
+    charData.reserve = Math.min(reserveCap(goal), (charData.reserve || 0) + kcal);
 }
 
 /**

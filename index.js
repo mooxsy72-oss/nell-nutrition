@@ -10,7 +10,7 @@ import { eventSource, event_types } from '../../../../scripts/events.js';
 import { power_user } from '../../../../scripts/power-user.js';
 
 import {
-    tickTime, applyMeal, applyDrink, applyVomit, goalOf, changeWeight, bankFat, KCAL_PER_KG,
+    tickTime, applyMeal, applyDrink, applyVomit, goalOf, changeWeight, KCAL_PER_KG,
     burnPerHour, setSatiety,
 } from './nutrition-engine.js';
 import { parseNnTag, parseNnInner, findNnInner, MAX_HOURS } from './parser.js';
@@ -36,6 +36,7 @@ const LS = {
     enabled: 'nellNutrition_enabled',
     scope: 'nellNutrition_scope',          // 'all' | 'last'
     expand: 'nellNutrition_expandLast',    // раскрывать блок последнего ответа
+    show: 'nellNutrition_show',            // 'always' | 'after' — показывать инфоблок сразу или после первого сообщения
     mode: 'nellNutrition_mode',            // 'easy' — пропуски дней без голодной смерти, 'hard' — выживание
     era: 'nellNutrition_era',              // 'modern' | 'historical' — без современной медицины
     position: 'nellNutrition_position',    // 'bottom' | 'top' — где инфоблок в сообщении
@@ -45,9 +46,19 @@ const LS = {
 const lsGet = (k, d) => { const v = localStorage.getItem(k); return v === null ? d : v; };
 const isEnabled = () => lsGet(LS.enabled, 'true') !== 'false';
 const scopeAll = () => lsGet(LS.scope, 'all') === 'all';
-const expandLast = () => lsGet(LS.expand, 'false') === 'true';
+const expandLast = () => ['true', 'always'].includes(lsGet(LS.expand, 'false'));
+// Показ инфоблока: 'always' — всегда в чате; 'after' — при входе в чат блоков нет,
+// появляются после первого сообщения игрока (или свайпа/перегенерации) в этом чате
+const showMode = () => (lsGet(LS.show, 'always') === 'after' ? 'after' : 'always');
+const blocksVisible = () => showMode() === 'always' || ui.userSpoke;
+const SHOW_HINT = {
+    after: 'При входе в чат блока нет — появится после вашего первого сообщения',
+    always: 'Блок всегда виден в чате',
+};
 const isHard = () => lsGet(LS.mode, 'easy') === 'hard';
-const isHistorical = () => lsGet(LS.era, 'modern') === 'historical';
+// Мир хранится в самом чате (state.era); в localStorage — только выбор для новых чатов
+const eraOf = () => (state?.era === 'historical' || state?.era === 'modern' ? state.era : lsGet(LS.era, 'modern'));
+const isHistorical = () => eraOf() === 'historical';
 const fallbackOn = () => lsGet(LS.fallback, 'false') === 'true';
 const fallbackProfile = () => lsGet(LS.fallbackProfile, '');
 const blockPos = () => (lsGet(LS.position, 'bottom') === 'top' ? 'top' : 'bottom');   // старое 'middle' → под текстом
@@ -133,7 +144,8 @@ function defaultCharState(name = '', charId = '') {
 
         hoursSinceLastMeal: 0, daysWithDeficit: 0,
         dayStartWeight: null,  // вес на начало игрового дня
-        fatLedger: 0,          // кг жира от баланса калорий за день — списывается в полночь
+        fatLedger: 0,          // добавочная потеря за день (вода и мышцы при полном голоде), кг — в полночь
+        offEaten: 0, offBurned: 0,   // съедено и сожжено за день на явном скипе (за кадром)
         foodNote: null,        // { kind: 'ate' | 'why' | 'off', text } — что ел(а) или почему не ест
         food: { likes: [], dislikes: [], habits: [] },   // пищевой профиль (вкладка «Журнал»)
         sceneActivity: 'low',  // активность в последнем ходу — для инфоблока
@@ -159,6 +171,7 @@ function defaultState() {
         weightMilestones: [],   // памятные даты веса: беременность, роды…
         snapshots: [],          // { beforeMsg, ... } — состояние ДО обработки ответа
         rpDate: null,           // дата/время из ролплея (тег date=)
+        era: null,              // мир этого чата: 'modern' | 'historical' (null — взять выбор по умолчанию)
         missedTag: 0,           // сколько ответов подряд пришло без тега (для «догоняющего» тега)
         calibrate: { pending: true, doneAt: null },   // уточнить профиль по карточкам в следующем ответе
         version: 3,
@@ -201,6 +214,9 @@ function loadState() {
 
         ensureBotState();
         if (state.clockHours == null) state.clockHours = 12;
+        // Новый чат (или старый, где мир ещё не выбирали) — берёт последний выбор
+        if (state.era !== 'modern' && state.era !== 'historical') state.era = lsGet(LS.era, 'modern');
+        setEra(state.era);
         // Вес на начало дня фиксируем уже после анализа карточек
         for (const c of [state.user, ...state.characters]) {
             if (c.dayStartWeight == null) c.dayStartWeight = c.weight;
@@ -401,7 +417,9 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
 
         for (const ch of chars) {
             const c = ch.data, g = effectiveGoal(c);
+            const burnedBefore = c.burned || 0;
             const r = tickTime(c, step, activityOf[ch.who], asleep, g, opts);
+            if (declaredSkip) c.offBurned = (c.offBurned || 0) + (c.burned || 0) - burnedBefore;
             r.events.forEach(e => ctx[ch.who].events.add(e));
             if (asleep) ctx.slept[ch.who] += step;
             else if (ctx.slept[ch.who] > 0) ctx.woke[ch.who] = true;
@@ -423,16 +441,14 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                     applyMeal(c, portion, 8, g);
                     markMeal(c, portion, at);
                     routineKcal[ch.who] += portion;
+                    c.offEaten = (c.offEaten || 0) + portion;
                     // Обычный обед по распорядку — не обжорство
                     c.recentIntake = Math.min(c.recentIntake || 0, g * 0.4);
                     c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
                 }
                 // Сытый организм добирает нехватку из жира, а не проваливается в гипогликемию
                 const floor = g * (asleep ? 0.25 : 0.4);
-                if ((c.reserve || 0) < floor) {
-                    bankFat(c, -(floor - c.reserve) / KCAL_PER_KG);
-                    c.reserve = floor;
-                }
+                if ((c.reserve || 0) < floor) c.reserve = floor;
             }
             if (routine && drinkOf[ch.who] && !asleep) {
                 // Пьют по жажде: чем меньше воды, тем больше пьют — вода держится около 75–80%
@@ -448,7 +464,8 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
         const newDay = Math.floor(state.clockHours / 24);
         for (let d = prevDay + 1; d <= newDay; d++) {
             for (const ch of chars) {
-                console.log(`[NN] полночь → день ${d + 1}: ${ch.who} съел(а) ${r0(ch.data.calories)} ккал, сжёг(ла) ${r0(ch.data.burned)}`);
+                const b = dayBalance(ch.data);
+                console.log(`[NN] полночь → день ${d + 1}: ${ch.who} съел(а) ${r0(ch.data.calories)} ккал, сжёг(ла) ${r0(ch.data.burned)}; в вес ${(b.kg >= 0 ? '+' : '') + b.kg.toFixed(3)} кг (сцена ${r0(b.played)}, скип ${r0(b.off)} → ${r0(b.offCounted)})`);
                 rolloverDay(ch, d, ctx);
             }
         }
@@ -647,19 +664,29 @@ function setPregWeekManual(c, week) {
     }
 }
 
-// Итог дня для веса: профицит откладывается всегда, а потеря — только если день
-// закончился голодным. Недоигранный день (утро и сразу скип) вес не отнимает.
+// Итог дня для веса — баланс «съедено − сожжено» за игровой день.
+//   • Отыгранное время идёт в вес всегда: осознанный день на дефиците — это потеря веса.
+//   • Явный скип (за кадром): в хардкоре — тоже всё как есть; в лёгком режиме недоедание
+//     на скипе в вес не идёт (профицит идёт).
+// Раньше вес шёл через запас энергии (~2500 ккал буфера) и только если в полночь персонаж
+// уже был голоден — поэтому отыгранный дефицитный день веса не снимал.
 const HUNGER_DISEASE_IDS = ['hypoglycemia', 'starvation', 'malnutrition'];
 function endedHungry(c) {
     return hasEffect(c, 'hunger') || c.satiety <= 15
         || c.diseases.some(d => HUNGER_DISEASE_IDS.includes(d.id) && !d.recovering);
 }
+function dayBalance(c) {
+    const offEaten = c.offEaten || 0, offBurned = c.offBurned || 0;
+    const played = Math.max(0, (c.calories || 0) - offEaten) - Math.max(0, (c.burned || 0) - offBurned);
+    const off = offEaten - offBurned;
+    const offCounted = isHard() ? off : Math.max(0, off);
+    return { played, off, offCounted, kg: (played + offCounted) / KCAL_PER_KG + (c.fatLedger || 0) };
+}
 function settleDayFat(c) {
-    const kg = c.fatLedger || 0;
-    c.fatLedger = 0;
-    if (Math.abs(kg) < 0.02) return { applied: 0, skipped: 0 };   // шум
-    if (kg > 0 || endedHungry(c)) { changeWeight(c, kg); return { applied: kg, skipped: 0 }; }
-    return { applied: 0, skipped: kg };
+    const b = dayBalance(c);
+    c.fatLedger = 0; c.offEaten = 0; c.offBurned = 0;
+    if (Math.abs(b.kg) >= 0.005) changeWeight(c, b.kg);
+    return { applied: b.kg, skipped: (b.off - b.offCounted) / KCAL_PER_KG, counted: b.played + b.offCounted };
 }
 
 function rolloverDay(ch, endedDay, ctx) {
@@ -675,13 +702,14 @@ function rolloverDay(ch, endedDay, ctx) {
     const fat = settleDayFat(c);
 
     // Итог дня: считаем по реальному балансу «съедено − сожжено»
-    const balance = intake - r0(c.burned);
+    // Подпись — по той части баланса, что ушла в вес
+    const balance = fat.counted;
     let reason = 'Норма';
-    if (fat.skipped < 0) reason = 'Неполный день';
-    else if (balance > 500) reason = 'Переедание';
+    if (balance > 500) reason = 'Переедание';
     else if (balance > 150) reason = 'Профицит';
-    else if (hungry && balance < -800) reason = 'Сильный дефицит';
-    else if (hungry && balance < -150) reason = 'Дефицит';
+    else if (balance < -800) reason = 'Сильный дефицит';
+    else if (balance < -150) reason = 'Дефицит';
+    else if (fat.skipped < -0.02) reason = 'Скип: недоедание не в вес';
     if (c.pregnant && reason === 'Норма') reason = 'Беременность';
 
     const start = c.dayStartWeight ?? c.weight;
@@ -1787,6 +1815,7 @@ function hashText(t) {
 // ═══════════════════════════════════════════════════════════════
 const ui = {
     open: new Map(),                       // mesId → раскрыт ли блок
+    userSpoke: false,                      // игрок уже писал в этом чате с момента входа (показ «после сообщения»)
     tab: new Map(),                        // mesId → активная вкладка
     cardOpen: { user: true, bot: true },   // карточки персонажей в «Обзоре»
     stateOpen: { user: false, bot: false },// раздел «Самочувствие»
@@ -1842,7 +1871,7 @@ function renderBlock(id) {
     const live = id === lastBotIndex();
     let block = el.querySelector('.nn-ib');
     const snap = state && msg && !msg.is_user && !msg.is_system ? (live ? liveSnap() : msg.extra?.nn) : null;
-    const show = isEnabled() && snap && snap.user && (scopeAll() || live);
+    const show = isEnabled() && blocksVisible() && snap && snap.user && (scopeAll() || live);
 
     if (!show) { el.querySelectorAll('.nn-ib').forEach(b => b.remove()); return; }
     // Дубликаты (другое расширение скопировало разметку) — оставляем один
@@ -2208,7 +2237,7 @@ function weightPane() {
             `<div><i class="fa-solid fa-bookmark"></i> ${esc(m.date || `день ${m.day}`)} — ${esc(m.label)} (${kg2(m.weight)})</div>`).join('')}</div>` : '';
         return `<section class="nn-card">
             <header class="nn-card-head nn-card-head-static">${avatarHtml(who, 'nn-av-lg')}<div class="nn-card-id"><div class="nn-card-name">${esc(who === 'user' ? getUserName() : c.name)}</div></div></header>
-            <div class="nn-kcal-num"><b>${kg2(c.weight)}</b><span>кг · сегодня ${kgDelta(today)} · ИМТ ${bmi.toFixed(1)} <span class="nn-${bl}-text">${bmiLabel}</span></span></div>
+            <div class="nn-kcal-num"><b>${kg2(c.weight)}</b><span>кг · сегодня ${kgDelta(today)}${Math.abs(dayBalance(c).kg) >= 0.01 ? ` (к полуночи ≈ ${kgDelta(dayBalance(c).kg)})` : ''} · ИМТ ${bmi.toFixed(1)} <span class="nn-${bl}-text">${bmiLabel}</span></span></div>
             ${notes.length ? `<div class="nn-kcal-meta">${notes.join(' · ')}</div>` : ''}
             ${ms}
         </section>`;
@@ -2320,6 +2349,12 @@ function whoSwitch() {
 }
 
 // ─── Параметры ────────────────────────────────────────────────
+function recalcVia() {
+    const id = fallbackProfile();
+    if (profileExists(id)) return `через профиль «${esc(cmProfiles().profiles.find(p => p.id === id)?.name || id)}»`;
+    return 'через основное подключение';
+}
+
 function paramsPane() {
     const data = ui.who === 'bot' ? getBotState() : state.user;
     if (!data) return `${whoSwitch()}`;
@@ -2345,7 +2380,8 @@ function paramsPane() {
         <input class="text_pole nn-num" type="number" data-field="manualGoal" min="800" max="6000" value="${manual ? data.manualGoal : auto}" ${manual ? '' : 'disabled'}>
     </div>
     <div class="nn-form-line">
-        <button class="nn-btn" data-act="reanalyze"><i class="fa-solid fa-arrows-rotate"></i>Пересчитать по карточкам и ролплею</button>
+        <button class="nn-btn" data-act="reanalyze" ${recalcBusy ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate${recalcBusy ? ' fa-spin' : ''}"></i>${recalcBusy ? 'Пересчитываю…' : 'Пересчитать по карточкам и ролплею'}</button>
+        <span class="nn-recalc-via">${recalcVia()}</span>
     </div>`;
 }
 
@@ -2405,11 +2441,168 @@ function savePregWeek(block, who) {
     injectPrompt();
 }
 
-function reanalyze() {
-    // ИИ уточнит профиль и состояние по карточкам и ролплею в следующем ответе (через инджект)
-    state.calibrate = { pending: true, doneAt: null };
-    saveState();
-    injectPrompt();
+// ═══════════════════════════════════════════════════════════════
+// ПЕРЕСЧЁТ ПО КАРТОЧКАМ — сразу, отдельным запросом
+// Профиль анализатора, если выбран; иначе основное подключение (generateRaw — без чата,
+// без инджекта, мимо Generate). В запрос: карточка чара, персона, текущие значения учёта
+// и последние сообщения. Не вышло — как раньше: модель уточнит в следующем ответе.
+// ═══════════════════════════════════════════════════════════════
+const RECALC_TIMEOUT = 90000;
+const RECALC_HISTORY = 10;
+let recalcBusy = false;
+
+const stCtx = () => (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext?.() : null);
+function macros(t) {
+    try { const f = stCtx()?.substituteParams; return f ? f(String(t)) : String(t); } catch { return String(t); }
+}
+const clip = (t, max) => { const x = String(t || '').trim(); return x.length > max ? `${x.slice(0, max).trimEnd()}…` : x; };
+
+function cardText(ch) {
+    if (!ch) return '';
+    const d = ch.data || {};
+    return [['Description', ch.description || d.description], ['Personality', ch.personality || d.personality], ['Scenario', ch.scenario || d.scenario]]
+        .filter(([, v]) => v && String(v).trim())
+        .map(([k, v]) => `${k}: ${clip(macros(v), 3000)}`).join('\n');
+}
+function personaText() {
+    return clip(macros(power_user?.persona_description || stCtx()?.powerUserSettings?.persona_description || ''), 2000);
+}
+function trackerLine(c, name) {
+    const g = c.gender === 'female' ? 'f' : c.gender === 'male' ? 'm' : '?';
+    const ed = Object.entries(c.ed || {}).filter(([, v]) => v).map(([k, v]) => `${k}:${v}`).join('+') || 'none';
+    const f = c.food || {};
+    const food = profileEmpty(c) ? 'food profile: unknown'
+        : `food profile known — likes: ${f.likes.join(', ') || '—'}; dislikes: ${f.dislikes.join(', ') || '—'}; habits: ${f.habits.join(', ') || '—'}`;
+    return `${name}: ${g}/${c.age}/${c.height}/${+(+c.weight).toFixed(1)}/${c.build}/${c.activity}/${ed}/${c.pregnant ? c.pregnancyWeek : 0} · satiety ${r0(c.satiety)}, water ${r0(c.water)}, energy ${r0(c.energy)} · ${food}`;
+}
+function recentStory(n = RECALC_HISTORY) {
+    const userName = getUserName(), botName = getBotName();
+    return chat.filter(m => m && !m.is_system && m.mes).slice(-n)
+        .map(m => `${m.is_user ? userName : (m.name || botName)}: ${cleanForAnalyzer(stripLooseTag(m.mes), 1500)}`)
+        .join('\n\n');
+}
+
+function buildRecalcPrompt() {
+    const userName = getUserName(), botName = getBotName();
+    const bot = getBotState();
+    const rules = calibrationRules(userName, botName).replace(/^Also add:/, 'Fields:');
+    const system = `You calibrate a nutrition tracker for a roleplay. Read the character card, the persona and the recent story, then output exactly one line and nothing else — no story, no explanations:
+<!-- NN user_profile=… | ${bot ? 'bot_profile=… | ' : ''}user_state=…${bot ? ' | bot_state=…' : ''} -->
+user_ = ${userName} (the player).${bot ? ` bot_ = ${botName}.` : ' There is no bot_ character: write only user_ fields.'}
+${rules}
+Story facts beat the card; the card beats the tracker's current values. SATIETY/WATER/ENERGY = how they are at the end of the recent story.
+Food profile fields only for someone whose food profile is unknown; if it is known, omit their _likes/_dislikes/_habits.
+Answer with the single line <!-- NN … --> only, closed with -->.`;
+    const card = bot ? cardText(getCurrentBot()) : '';
+    const persona = personaText();
+    const story = recentStory();
+    const user = [
+        card ? `[Character card — ${botName}]\n${card}` : '',
+        persona ? `[Persona — ${userName}]\n${persona}` : '',
+        `[Tracker now — GENDER/AGE/HEIGHT/WEIGHT/BUILD/LIFESTYLE/ED/PREG_WEEK; fix anything the card or story contradicts]\n${trackerLine(state.user, userName)}${bot ? `\n${trackerLine(bot, botName)}` : ''}`,
+        story ? `[Recent story — last ${RECALC_HISTORY} messages]\n${story}` : '',
+        'Write the line now.',
+    ].filter(Boolean).join('\n\n');
+    return { system, user };
+}
+
+/** Запрос к основному подключению без чата и инджекта */
+async function askMain(system, prompt, maxTokens) {
+    const fn = stCtx()?.generateRaw || stModule?.generateRaw;
+    if (typeof fn !== 'function') throw new Error('generateRaw недоступен');
+    // Новые версии таверны: generateRaw({ prompt, systemPrompt, responseLength }); старые — аргументы по порядку
+    const res = fn.length >= 2
+        ? await fn(prompt, '', false, false, system, maxTokens)
+        : await fn({ prompt, systemPrompt: system, responseLength: maxTokens });
+    return typeof res === 'string' ? res : String(res?.content ?? res ?? '');
+}
+
+function parseRecalc(out) {
+    let inner = findNnInner(out, { loose: true });
+    if (inner == null) {
+        // Модель забыла <!-- NN — берём строку с полями как есть
+        const m = String(out || '').match(/((?:user|bot)_(?:profile|state)\s*=[\s\S]*)$/i);
+        inner = m ? m[1] : null;
+    }
+    if (inner == null) return null;
+    const tag = parseNnInner(String(inner).replace(/-->[\s\S]*$/, '').trim());
+    return tag && (tag.userProfile || tag.botProfile || tag.userState || tag.botState) ? tag : null;
+}
+
+function describeProfile(c, name) {
+    const g = c.gender === 'female' ? 'ж' : c.gender === 'male' ? 'м' : '?';
+    return `${name}: ${g}, ${c.age} л., ${c.height} см, ${kg(c.weight)} кг, ${BUILD_TYPES[c.build]?.labelRu?.toLowerCase() || c.build}`;
+}
+
+function applyRecalc(tag) {
+    const bot = getBotState();
+    const lines = [];
+    if (tag.userProfile) applyProfile(state.user, tag.userProfile);
+    if (tag.userState) applyStateCalib(state.user, tag.userState);
+    if (tag.userProfile || tag.userState) lines.push(describeProfile(state.user, getUserName()));
+    if (bot) {
+        if (tag.botProfile) applyProfile(bot, tag.botProfile);
+        if (tag.botState) applyStateCalib(bot, tag.botState);
+        if (tag.botProfile || tag.botState) lines.push(describeProfile(bot, getBotName()));
+    }
+    const prof = { user: state.user, bot };
+    for (const who of ['user', 'bot']) {
+        const c = prof[who];
+        if (!c) continue;
+        addToProfile(c, 'likes', tag[`${who}Likes`]);
+        addToProfile(c, 'dislikes', tag[`${who}Dislikes`]);
+        addToProfile(c, 'habits', tag[`${who}Habits`]);
+    }
+    return lines;
+}
+
+function toast(kind, text, title = 'Калории и питание') {
+    const t = globalThis.toastr;
+    if (t?.[kind]) t[kind](text, title);
+    else console.log(`[NN] ${title}: ${text}`);
+}
+
+async function reanalyze() {
+    if (recalcBusy) return;
+    if (!state) loadState();
+    if (generating) { toast('info', 'Идёт генерация — нажмите, когда она закончится'); return; }
+    const profileId = profileExists(fallbackProfile()) ? fallbackProfile() : null;
+    const epoch = chatEpoch;
+    const ctrl = new AbortController();
+    const wasGenerating = generating;
+    recalcBusy = true;
+    renderLiveBlock();
+    let out = null, err = null, timer = null;
+    try {
+        const { system, user } = buildRecalcPrompt();
+        const timeout = new Promise((_, rej) => { timer = setTimeout(() => { ctrl.abort(); rej(new Error('нет ответа 90 с')); }, RECALC_TIMEOUT); });
+        const req = profileId
+            ? askProfile(profileId, [{ role: 'system', content: system }, { role: 'user', content: user }], FALLBACK_MAX_TOKENS, ctrl.signal)
+            : askMain(system, user, FALLBACK_MAX_TOKENS);
+        out = await Promise.race([req, timeout]);
+    } catch (e) {
+        err = e;
+    } finally {
+        clearTimeout(timer);
+        recalcBusy = false;
+        // generateRaw в некоторых версиях шлёт «генерация началась», но не «закончилась»
+        if (!wasGenerating) generating = false;
+    }
+    if (epoch !== chatEpoch || !state) return;   // чат сменился — результат не наш
+    const tag = out ? parseRecalc(out) : null;
+    if (!tag) {
+        console.warn('[NN] пересчёт по карточкам не удался', err || out);
+        state.calibrate = { pending: true, doneAt: null };
+        saveState(); injectPrompt(); renderLiveBlock();
+        const why = err ? (err.message || String(err)).replace(/^Error:\s*/, '').slice(0, 90) : 'в ответе нет нужной строки';
+        toast('warning', `Не получилось пересчитать (${why}). Уточню в следующем ответе.`);
+        return;
+    }
+    const lines = applyRecalc(tag);
+    console.log('[NN] пересчёт по карточкам:', tag.inner);
+    state.calibrate = { pending: false, doneAt: null };
+    saveState(); injectPrompt(); renderLiveBlock();
+    toast('success', lines.length ? `Пересчитано: ${lines.join('; ')}` : 'Пересчитано');
 }
 
 // ─── События внутри блока ─────────────────────────────────────
@@ -2532,7 +2725,7 @@ function injectSettingsPanel() {
                 </div>
 
                 <div class="nn-set-group">
-                    <div class="nn-set-title">Мир</div>
+                    <div class="nn-set-title">Мир <span class="nn-set-note"><i class="fa-solid fa-link"></i> для этого чата</span></div>
                     <div class="nn-opts">
                         ${tile('nn-era', 'modern', !isHistorical(), 'fa-house-medical', 'Современность', 'Врачи, лекарства, чистая вода')}
                         ${tile('nn-era', 'historical', isHistorical(), 'fa-scroll', 'Старина', 'Травы и колодцы, болеют чаще и дольше')}
@@ -2541,6 +2734,11 @@ function injectSettingsPanel() {
 
                 <div class="nn-set-group">
                     <div class="nn-set-title">Инфоблок</div>
+                    <div class="nn-seg">
+                        ${seg('nn-show', 'after', showMode() === 'after', 'fa-reply', 'После моего сообщения')}
+                        ${seg('nn-show', 'always', showMode() === 'always', 'fa-eye', 'Всегда')}
+                    </div>
+                    <div class="nn-set-hint" id="nn-show-hint">${SHOW_HINT[showMode()]}</div>
                     <div class="nn-seg">
                         ${seg('nn-scope', 'all', scopeAll(), 'fa-layer-group', 'Под каждым ответом')}
                         ${seg('nn-scope', 'last', !scopeAll(), 'fa-square', 'Только в последнем')}
@@ -2565,6 +2763,7 @@ function injectSettingsPanel() {
                         <div id="nn-an-check" class="menu_button nn-an-btn" role="button" tabindex="0" title="Проверить подключение"><i class="fa-solid fa-satellite-dish"></i></div>
                     </div>
                     <div class="nn-an-status" id="nn-an-status" hidden></div>
+                    <div class="nn-set-hint">Этот же профиль — для «Пересчитать по карточкам». Не выбран — основное подключение.</div>
                 </div>
 
                 <div class="nn-set-actions">
@@ -2593,7 +2792,9 @@ function injectSettingsPanel() {
                 setEffectsMode(isHard());
                 injectPrompt();
             } else if (t.name === 'nn-era') {
-                localStorage.setItem(LS.era, t.value);
+                localStorage.setItem(LS.era, t.value);   // по умолчанию для новых чатов
+                if (!state) loadState();
+                if (state) { state.era = t.value; saveState(); }
                 setEra(t.value);
                 injectPrompt();
             } else if (t.name === 'nn-scope') {
@@ -2602,9 +2803,15 @@ function injectSettingsPanel() {
             } else if (t.name === 'nn-position') {
                 localStorage.setItem(LS.position, t.value);
                 renderAllBlocks();
+            } else if (t.name === 'nn-show') {
+                localStorage.setItem(LS.show, t.value);
+                const hint = root.querySelector('#nn-show-hint');
+                if (hint) hint.textContent = SHOW_HINT[showMode()];
+                renderAllBlocks();
             }
         });
         bindAnalyzerPanel(root);
+        syncSettingsPanel();
         root.querySelector('#nn-dbg-clear')?.addEventListener('click', () => {
             if (!state) loadState();
             if (!confirm('Убрать болезни и эффекты и вернуть сытость, воду и силы к норме?')) return;
@@ -2620,7 +2827,8 @@ function injectSettingsPanel() {
         });
         root.querySelector('#nn-dbg-reset')?.addEventListener('click', () => {
             if (!confirm('Сбросить весь учёт питания в этом чате?')) return;
-            chat_metadata[META_KEY] = defaultState();
+            const era = eraOf();
+            chat_metadata[META_KEY] = { ...defaultState(), era };
             loadState(); saveState(); injectPrompt(); renderAllBlocks();
         });
     }, 250);
@@ -2741,13 +2949,20 @@ function bindAnalyzerPanel(root) {
 // ═══════════════════════════════════════════════════════════════
 let generating = false;
 
+// Игрок написал (или свайпнул/перегенерировал) — в режиме «после сообщения» блоки появляются
+function markUserSpoke() {
+    if (ui.userSpoke) return;
+    ui.userSpoke = true;
+    if (showMode() === 'after') scheduleRenderAll();
+}
+
 function onGenerationStarted(type, params, dryRun) {
     if (dryRun) return;
     generating = true;
     if (!isEnabled()) return;
     if (!state) loadState();
     // Настоящая генерация (не фоновая quiet от других расширений) делает запросы анализатора устаревшими
-    if (type !== 'quiet') { genEpoch++; abortFallbacks(); }
+    if (type !== 'quiet') { genEpoch++; abortFallbacks(); markUserSpoke(); }
     const regen = ['swipe', 'regenerate', 'continue'].includes(type);
     calibrateNow = !!state.calibrate?.pending || (regen && state.calibrate?.doneAt === lastBotIndex());
     injectPrompt();
@@ -2787,12 +3002,22 @@ function onMessageEdited(id) {
     else scheduleRenderAll();
 }
 
+// Панель показывает настройки текущего чата
+function syncSettingsPanel() {
+    const root = document.getElementById('nn-settings-drawer');
+    if (!root) return;
+    const era = root.querySelector(`input[name="nn-era"][value="${eraOf()}"]`);
+    if (era) era.checked = true;
+}
+
 function onChatChanged() {
     chatEpoch++;
     abortFallbacks();
     ui.open.clear();
     ui.tab.clear();
+    ui.userSpoke = false;
     loadState();
+    syncSettingsPanel();
     injectPrompt();
     for (const ms of [150, 600, 1500]) setTimeout(renderAllBlocks, ms);
 }
@@ -2850,6 +3075,7 @@ function init() {
     on(event_types.GENERATION_ENDED, onGenerationEnded);
     on(event_types.GENERATION_STOPPED, onGenerationEnded);
     on(event_types.MESSAGE_RECEIVED, onMessageReceived);
+    on(event_types.MESSAGE_SENT, markUserSpoke);
     on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
     on(event_types.GENERATE_AFTER_COMBINE_PROMPTS, onAfterCombinePrompts);
     on(event_types.CHARACTER_MESSAGE_RENDERED, scheduleRenderAll);
