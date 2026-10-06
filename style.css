@@ -466,7 +466,7 @@
 .nn-set-title { font-size: 0.85em; color: var(--nn-mute); padding-left: 2px; }
 .nn-set-note { margin-left: 4px; font-size: 0.92em; color: var(--nn-acc); opacity: 0.85; white-space: nowrap; }
 .nn-set-note i { font-size: 0.85em; margin-right: 2px; }
-.nn-set-hint { font-size: 0.8em; color: var(--nn-mute); padding-left: 2px; line-height: 1.3; }
+.nn-set-hint { font-size: 0.8em; color: var(--nn-mute); line-height: 1.3; text-align: center; margin: -2px 0 4px; }
 
 
 /* Плитки */
@@ -489,21 +489,23 @@
 }
 .nn-opt input:checked + .nn-opt-box > i { color: var(--nn-acc); }
 
-/* Таблетки */
-.nn-seg { display: flex; padding: 3px; gap: 3px; border-radius: 999px; background: var(--nn-soft-2); }
-.nn-seg-opt { flex: 1; margin: 0; cursor: pointer; }
+/* Таблетки: иконка сверху по центру, подпись под ней; варианты одной высоты,
+   выбранный закрашен целиком — даже если соседний перенёсся на две строки */
+.nn-seg { display: flex; align-items: stretch; padding: 3px; gap: 3px; border-radius: 14px; background: var(--nn-soft-2); }
+.nn-seg-opt { flex: 1 1 0; min-width: 0; display: flex; margin: 0; cursor: pointer; }
 .nn-seg-opt span {
-    display: flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 5px 8px; border-radius: 999px; font-size: 0.9em; text-align: center;
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 3px;
+    padding: 6px 6px; border-radius: 11px; font-size: 0.9em; line-height: 1.2; text-align: center;
     color: var(--nn-mute); transition: background-color .15s, color .15s;
 }
-.nn-seg-opt span i { font-size: 0.85em; }
+.nn-seg-opt span i { font-size: 0.95em; }
 .nn-seg-opt:hover span { color: var(--nn-fg); }
 .nn-seg-opt input:checked + span {
     color: var(--nn-fg);
     background: color-mix(in srgb, var(--nn-acc) 22%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nn-acc) 55%, transparent);
 }
+.nn-seg-opt input:checked + span i { color: var(--nn-acc); }
 
 /* Переключатель */
 .nn-switch { display: flex; align-items: center; gap: 10px; margin: 0; cursor: pointer; position: relative; }
@@ -823,6 +825,9 @@
     .nn-an-badge > i, .nn-an-dots i, .nn-an-btn i, .nn-an-dot, .nn-ib.nn-an-done { animation: none !important; }
 }
 
-/* Пересчёт по карточкам: через какое подключение */
+/* Пересчёт по карточкам: галочка веса над кнопкой, подпись «через что» рядом */
+.nn-recalc { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--nn-line); display: flex; flex-direction: column; gap: 6px; }
+.nn-recalc .nn-form-line { margin-top: 0; }
+.nn-keep-rp { margin: 0; line-height: 1.3; }
 .nn-recalc-via { font-size: 0.8em; color: var(--nn-mute); }
 .nn-ib .nn-btn[disabled] { opacity: 0.6; cursor: progress; }

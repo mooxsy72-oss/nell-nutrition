@@ -37,6 +37,7 @@ const LS = {
     scope: 'nellNutrition_scope',          // 'all' | 'last'
     expand: 'nellNutrition_expandLast',    // раскрывать блок последнего ответа
     show: 'nellNutrition_show',            // 'always' | 'after' — показывать инфоблок сразу или после первого сообщения
+    keepRp: 'nellNutrition_recalcKeepRp',  // пересчёт по карточкам сохраняет вес, набранный/сброшенный в ролплее
     mode: 'nellNutrition_mode',            // 'easy' — пропуски дней без голодной смерти, 'hard' — выживание
     era: 'nellNutrition_era',              // 'modern' | 'historical' — без современной медицины
     position: 'nellNutrition_position',    // 'bottom' | 'top' — где инфоблок в сообщении
@@ -49,6 +50,7 @@ const scopeAll = () => lsGet(LS.scope, 'all') === 'all';
 const expandLast = () => ['true', 'always'].includes(lsGet(LS.expand, 'false'));
 // Показ инфоблока: 'always' — всегда в чате; 'after' — при входе в чат блоков нет,
 // появляются после первого сообщения игрока (или свайпа/перегенерации) в этом чате
+const keepRpWeight = () => lsGet(LS.keepRp, 'true') !== 'false';
 const showMode = () => (lsGet(LS.show, 'always') === 'after' ? 'after' : 'always');
 const blocksVisible = () => showMode() === 'always' || ui.userSpoke;
 const SHOW_HINT = {
@@ -72,7 +74,7 @@ const ACT_ICON = { low: 'fa-couch', medium: 'fa-person-walking', high: 'fa-perso
 // Поля профиля — их не откатываем при свайпе/удалении (это правки пользователя)
 // Профиль переживает откат снимка (свайп/удаление): рост, норма, РПП, пищевой профиль
 const PROFILE_FIELDS = ['gender', 'age', 'height', 'build', 'activity',
-    'manualGoal', 'calorieGoal', 'ed', 'food'];
+    'manualGoal', 'calorieGoal', 'ed', 'food', 'cardWeight'];
 
 function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -121,6 +123,7 @@ function defaultCharState(name = '', charId = '') {
         gender: 'unknown', age: 28, height: 170, weight: 65,
         build: 'average', activity: 'light',
         calorieGoal: 2000, manualGoal: null,
+        cardWeight: null,       // вес по карточке (последняя калибровка); вес − cardWeight = изменение за ролплей
 
         calories: 0,        // съедено за игровой день
         burned: 0,          // сожжено за игровой день
@@ -1176,8 +1179,8 @@ function processAiResponse(messageId) {
     if (tag) {
         if (tag.userFeel) state.user.feel = reconcileFeel(tag.userFeel, state.user, ctx.user, sleeping, hours);
         if (bot && tag.botFeel) bot.feel = reconcileFeel(tag.botFeel, bot, ctx.bot, sleeping, hours);
-        if (tag.userProfile) applyProfile(state.user, tag.userProfile);
-        if (bot && tag.botProfile) applyProfile(bot, tag.botProfile);
+        if (tag.userProfile) applyCalibration(state.user, tag.userProfile, 'user');
+        if (bot && tag.botProfile) applyCalibration(bot, tag.botProfile, 'bot');
         if (tag.userState) applyStateCalib(state.user, tag.userState);
         if (bot && tag.botState) applyStateCalib(bot, tag.botState);
     }
@@ -1479,6 +1482,27 @@ function flashDone(N) {
     }, 90);
 }
 
+// Сколько вес изменился за ролплей (еда, голод, беременность, _weight из истории).
+// Есть вес по карточке — от него; старый чат без него — сумма изменений по дням + сегодня
+// (калибровки и ручные правки в эти изменения не входят).
+function rpWeightDelta(c, who) {
+    if (!c) return 0;
+    if (c.cardWeight != null) return c.weight - c.cardWeight;
+    const days = (state.weightHistory || []).filter(e => e.who === who && (who === 'user' || e.name === c.name));
+    return days.reduce((a, e) => a + (e.change || 0), 0) + (c.weight - (c.dayStartWeight ?? c.weight));
+}
+
+// Калибровка по карточкам: модель даёт вес по карточке (тело до ролплея).
+// Галочка «учитывать вес из ролплея» — прибавляем к нему то, что набежало в игре; без неё — вес ровно по карточке.
+function applyCalibration(c, p, who) {
+    if (p.weight == null) { applyProfile(c, p); return; }
+    const card = p.weight;
+    const keep = keepRpWeight() ? rpWeightDelta(c, who) : 0;
+    applyProfile(c, { ...p, weight: Math.max(30, Math.round((card + keep) * 1000) / 1000) });
+    c.cardWeight = card;
+    if (Math.abs(keep) >= 0.05) console.log(`[NN] ${who}: вес по карточке ${card} + за ролплей ${keep.toFixed(2)} = ${c.weight.toFixed(2)} кг`);
+}
+
 function applyProfile(c, p) {
     if (p.weight != null && Math.abs(p.weight - c.weight) > 0.05) {
         shiftWeight(c, p.weight - c.weight);
@@ -1679,7 +1703,7 @@ function tagFieldRules(userName, botName) {
 
 function calibrationRules(userName, botName) {
     return `Also add: user_profile=GENDER/AGE/HEIGHT_CM/WEIGHT_KG/BUILD/LIFESTYLE/ED/PREG_WEEK | bot_profile=… | user_state=SATIETY/WATER/ENERGY | bot_state=…
-Use ${botName}'s character card, ${userName}'s persona description and the story so far; give your best estimate for anything not stated.
+Use ${botName}'s character card, ${userName}'s persona description and the story so far; give your best estimate for anything not stated. WEIGHT_KG = the body as the card/persona describe it, before this roleplay — weight gained or lost in the story is tracked separately, don't add it.
 GENDER m or f · BUILD slim|average|athletic|muscular|heavy · LIFESTYLE sedentary|light|moderate|active|very_active · ED none, or anorexia|bulimia|binge with :mild|:moderate|:severe, only if clearly established · PREG_WEEK the pregnancy week, 0 if not pregnant · SATIETY, WATER, ENERGY 0–100, how they are right now.
 Example shape: user_profile=f/24/165/57/slim/light/none/0 | bot_profile=m/30/185/82/muscular/active/none/0 | user_state=70/60/80 | bot_state=85/70/65
 ${foodProfileRule()}`;
@@ -2349,6 +2373,12 @@ function whoSwitch() {
 }
 
 // ─── Параметры ────────────────────────────────────────────────
+function rpDeltaNote() {
+    const parts = activeChars().map(ch => [ch.name, rpWeightDelta(ch.data, ch.who)])
+        .filter(([, d]) => Math.abs(d) >= 0.05).map(([n, d]) => `${esc(n)} ${kgDelta(d, 1)} кг`);
+    return parts.length ? ` <span class="nn-mute">(${parts.join(' · ')})</span>` : ' <span class="nn-mute">(пока без изменений)</span>';
+}
+
 function recalcVia() {
     const id = fallbackProfile();
     if (profileExists(id)) return `через профиль «${esc(cmProfiles().profiles.find(p => p.id === id)?.name || id)}»`;
@@ -2379,9 +2409,15 @@ function paramsPane() {
         <label class="checkbox_label"><input type="checkbox" data-field="manualToggle" ${manual ? 'checked' : ''}>Своя норма калорий</label>
         <input class="text_pole nn-num" type="number" data-field="manualGoal" min="800" max="6000" value="${manual ? data.manualGoal : auto}" ${manual ? '' : 'disabled'}>
     </div>
-    <div class="nn-form-line">
-        <button class="nn-btn" data-act="reanalyze" ${recalcBusy ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate${recalcBusy ? ' fa-spin' : ''}"></i>${recalcBusy ? 'Пересчитываю…' : 'Пересчитать по карточкам и ролплею'}</button>
-        <span class="nn-recalc-via">${recalcVia()}</span>
+    <div class="nn-recalc">
+        <label class="checkbox_label nn-keep-rp" title="Включено: вес по карточке + то, что набрано или сброшено за ролплей. Выключено: вес ровно по карточкам.">
+            <input type="checkbox" data-field="keepRpWeight" ${keepRpWeight() ? 'checked' : ''}>
+            <span>Учитывать изменение веса в ролплее${rpDeltaNote()}</span>
+        </label>
+        <div class="nn-form-line">
+            <button class="nn-btn" data-act="reanalyze" ${recalcBusy ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate${recalcBusy ? ' fa-spin' : ''}"></i>${recalcBusy ? 'Пересчитываю…' : 'Пересчитать по карточкам и ролплею'}</button>
+            <span class="nn-recalc-via">${recalcVia()}</span>
+        </div>
     </div>`;
 }
 
@@ -2389,6 +2425,10 @@ function onParamChange(el) {
     const data = ui.who === 'bot' ? getBotState() : state.user;
     if (!data) return;
     const f = el.dataset.field;
+    if (f === 'keepRpWeight') {   // настройка пересчёта, не поле профиля
+        localStorage.setItem(LS.keepRp, el.checked ? 'true' : 'false');
+        return;
+    }
     if (f.startsWith('ed_')) {
         data.ed = { ...(data.ed || {}), [f.slice(3)]: el.value || null };
     } else if (f === 'manualToggle') {
@@ -2424,6 +2464,7 @@ function onParamChange(el) {
 function shiftWeight(data, delta) {
     if (!delta) return;
     data.dayStartWeight = (data.dayStartWeight ?? data.weight) + delta;
+    if (data.cardWeight != null) data.cardWeight += delta;   // правка профиля, а не ролплей
     for (const snap of state.snapshots) {
         const c = data === state.user ? snap.user : snap.characters.find(x => x.charId === data.charId);
         if (c) { c.weight = +(c.weight + delta).toFixed(3); if (c.dayStartWeight != null) c.dayStartWeight += delta; }
@@ -2467,13 +2508,16 @@ function cardText(ch) {
 function personaText() {
     return clip(macros(power_user?.persona_description || stCtx()?.powerUserSettings?.persona_description || ''), 2000);
 }
-function trackerLine(c, name) {
+function trackerLine(c, name, who) {
     const g = c.gender === 'female' ? 'f' : c.gender === 'male' ? 'm' : '?';
     const ed = Object.entries(c.ed || {}).filter(([, v]) => v).map(([k, v]) => `${k}:${v}`).join('+') || 'none';
     const f = c.food || {};
     const food = profileEmpty(c) ? 'food profile: unknown'
         : `food profile known — likes: ${f.likes.join(', ') || '—'}; dislikes: ${f.dislikes.join(', ') || '—'}; habits: ${f.habits.join(', ') || '—'}`;
-    return `${name}: ${g}/${c.age}/${c.height}/${+(+c.weight).toFixed(1)}/${c.build}/${c.activity}/${ed}/${c.pregnant ? c.pregnancyWeek : 0} · satiety ${r0(c.satiety)}, water ${r0(c.water)}, energy ${r0(c.energy)} · ${food}`;
+    const rp = rpWeightDelta(c, who);
+    const base = +(c.weight - rp).toFixed(1);
+    const rpNote = Math.abs(rp) >= 0.1 ? ` (weight by card; ${rp > 0 ? '+' : ''}${rp.toFixed(1)} kg changed in play — tracked, don't include)` : '';
+    return `${name}: ${g}/${c.age}/${c.height}/${base}/${c.build}/${c.activity}/${ed}/${c.pregnant ? c.pregnancyWeek : 0}${rpNote} · satiety ${r0(c.satiety)}, water ${r0(c.water)}, energy ${r0(c.energy)} · ${food}`;
 }
 function recentStory(n = RECALC_HISTORY) {
     const userName = getUserName(), botName = getBotName();
@@ -2490,7 +2534,7 @@ function buildRecalcPrompt() {
 <!-- NN user_profile=… | ${bot ? 'bot_profile=… | ' : ''}user_state=…${bot ? ' | bot_state=…' : ''} -->
 user_ = ${userName} (the player).${bot ? ` bot_ = ${botName}.` : ' There is no bot_ character: write only user_ fields.'}
 ${rules}
-Story facts beat the card; the card beats the tracker's current values. SATIETY/WATER/ENERGY = how they are at the end of the recent story.
+Story facts beat the card (except WEIGHT_KG — by the card, see above); the card beats the tracker's current values. SATIETY/WATER/ENERGY = how they are at the end of the recent story.
 Food profile fields only for someone whose food profile is unknown; if it is known, omit their _likes/_dislikes/_habits.
 Answer with the single line <!-- NN … --> only, closed with -->.`;
     const card = bot ? cardText(getCurrentBot()) : '';
@@ -2499,7 +2543,7 @@ Answer with the single line <!-- NN … --> only, closed with -->.`;
     const user = [
         card ? `[Character card — ${botName}]\n${card}` : '',
         persona ? `[Persona — ${userName}]\n${persona}` : '',
-        `[Tracker now — GENDER/AGE/HEIGHT/WEIGHT/BUILD/LIFESTYLE/ED/PREG_WEEK; fix anything the card or story contradicts]\n${trackerLine(state.user, userName)}${bot ? `\n${trackerLine(bot, botName)}` : ''}`,
+        `[Tracker now — GENDER/AGE/HEIGHT/WEIGHT/BUILD/LIFESTYLE/ED/PREG_WEEK; fix anything the card or story contradicts]\n${trackerLine(state.user, userName, 'user')}${bot ? `\n${trackerLine(bot, botName, 'bot')}` : ''}`,
         story ? `[Recent story — last ${RECALC_HISTORY} messages]\n${story}` : '',
         'Write the line now.',
     ].filter(Boolean).join('\n\n');
@@ -2537,11 +2581,11 @@ function describeProfile(c, name) {
 function applyRecalc(tag) {
     const bot = getBotState();
     const lines = [];
-    if (tag.userProfile) applyProfile(state.user, tag.userProfile);
+    if (tag.userProfile) applyCalibration(state.user, tag.userProfile, 'user');
     if (tag.userState) applyStateCalib(state.user, tag.userState);
     if (tag.userProfile || tag.userState) lines.push(describeProfile(state.user, getUserName()));
     if (bot) {
-        if (tag.botProfile) applyProfile(bot, tag.botProfile);
+        if (tag.botProfile) applyCalibration(bot, tag.botProfile, 'bot');
         if (tag.botState) applyStateCalib(bot, tag.botState);
         if (tag.botProfile || tag.botState) lines.push(describeProfile(bot, getBotName()));
     }
@@ -2735,13 +2779,13 @@ function injectSettingsPanel() {
                 <div class="nn-set-group">
                     <div class="nn-set-title">Инфоблок</div>
                     <div class="nn-seg">
-                        ${seg('nn-show', 'after', showMode() === 'after', 'fa-reply', 'После моего сообщения')}
+                        ${seg('nn-show', 'after', showMode() === 'after', 'fa-reply', 'После сообщения')}
                         ${seg('nn-show', 'always', showMode() === 'always', 'fa-eye', 'Всегда')}
                     </div>
                     <div class="nn-set-hint" id="nn-show-hint">${SHOW_HINT[showMode()]}</div>
                     <div class="nn-seg">
-                        ${seg('nn-scope', 'all', scopeAll(), 'fa-layer-group', 'Под каждым ответом')}
-                        ${seg('nn-scope', 'last', !scopeAll(), 'fa-square', 'Только в последнем')}
+                        ${seg('nn-scope', 'all', scopeAll(), 'fa-layer-group', 'В каждом ответе')}
+                        ${seg('nn-scope', 'last', !scopeAll(), 'fa-square', 'В последнем')}
                     </div>
                     <div class="nn-seg">
                         ${seg('nn-position', 'bottom', blockPos() === 'bottom', 'fa-arrow-down-long', 'Под текстом')}
