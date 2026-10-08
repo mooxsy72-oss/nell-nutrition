@@ -831,3 +831,25 @@
 .nn-keep-rp { margin: 0; line-height: 1.3; }
 .nn-recalc-via { font-size: 0.8em; color: var(--nn-mute); }
 .nn-ib .nn-btn[disabled] { opacity: 0.6; cursor: progress; }
+
+/* ─── Помощник считает ответ: блик по шапке, кольца крутятся, содержимое приглушено (только transform/opacity) ─── */
+.nn-ib.nn-analyzing .nn-head { position: relative; overflow: hidden; }
+.nn-ib.nn-analyzing .nn-head::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(100deg, transparent 35%, color-mix(in srgb, var(--nn-acc) 16%, transparent) 50%, transparent 65%);
+    transform: translateX(-100%); animation: nn-sweep 1.8s ease-in-out infinite; will-change: transform;
+}
+@keyframes nn-sweep { to { transform: translateX(100%); } }
+.nn-ib.nn-analyzing .nn-ringav svg { animation: nn-ring-turn 2.4s linear infinite; transform-origin: 50% 50%; will-change: transform; }
+@keyframes nn-ring-turn { to { transform: rotate(360deg); } }
+.nn-ib.nn-analyzing .nn-chip-kcal { opacity: 0.55; transition: opacity 0.3s ease; }
+.nn-an-badge > i.fa-feather-pointed { animation: nn-quill 1.4s ease-in-out infinite; }
+@keyframes nn-quill { 50% { transform: translateY(-2px) rotate(-14deg); } }
+.nn-an-label { font-size: 0.9em; }
+.nn-an-retry { margin-left: auto; color: var(--nn-warn, var(--nn-acc)); cursor: pointer; padding: 4px; border-radius: 50%; }
+.nn-an-retry:hover { background: var(--nn-soft-2); }
+.nn-an-retry + .nn-chev { margin-left: 4px; }
+@media (prefers-reduced-motion: reduce) {
+    .nn-ib.nn-analyzing .nn-head::after, .nn-ib.nn-analyzing .nn-ringav svg, .nn-an-badge > i.fa-feather-pointed { animation: none; }
+    .nn-ib.nn-analyzing .nn-head::after { display: none; }
+}

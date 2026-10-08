@@ -37,7 +37,8 @@ const LS = {
     scope: 'nellNutrition_scope',          // 'all' | 'last'
     expand: 'nellNutrition_expandLast',    // раскрывать блок последнего ответа
     show: 'nellNutrition_show',            // 'always' | 'after' — показывать инфоблок сразу или после первого сообщения
-    keepRp: 'nellNutrition_recalcKeepRp',  // пересчёт по карточкам сохраняет вес, набранный/сброшенный в ролплее
+    keepRp: 'nellNutrition_recalcKeepRp',
+    track: 'nellNutrition_track',          // 'reply' — тег пишет основная модель; 'side' — отдельный запрос  // пересчёт по карточкам сохраняет вес, набранный/сброшенный в ролплее
     mode: 'nellNutrition_mode',            // 'easy' — пропуски дней без голодной смерти, 'hard' — выживание
     era: 'nellNutrition_era',              // 'modern' | 'historical' — без современной медицины
     position: 'nellNutrition_position',    // 'bottom' | 'top' — где инфоблок в сообщении
@@ -62,6 +63,8 @@ const isHard = () => lsGet(LS.mode, 'easy') === 'hard';
 const eraOf = () => (state?.era === 'historical' || state?.era === 'modern' ? state.era : lsGet(LS.era, 'modern'));
 const isHistorical = () => eraOf() === 'historical';
 const fallbackOn = () => lsGet(LS.fallback, 'false') === 'true';
+// Учёт отдельным запросом: основная модель тег не пишет и правил тега не видит
+const sideMode = () => lsGet(LS.track, 'reply') === 'side';
 const fallbackProfile = () => lsGet(LS.fallbackProfile, '');
 const blockPos = () => (lsGet(LS.position, 'bottom') === 'top' ? 'top' : 'bottom');   // старое 'middle' → под текстом
 
@@ -390,11 +393,14 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
     setEffectsMode(isHard());
     setEra(isHistorical() ? 'historical' : 'modern');
     if (state.clockHours == null) state.clockHours = 12;
-    // Явный скип или долгий отрезок проживается по распорядку, шагами по часу: ночью спят, пьют по жажде.
-    // Едят за кадром только на ЯВНОМ скипе (skip= или сутки и больше). Ночь, дорога, «прошло полдня»
-    // без skip= — еды нет: что съели в сцене, модель пишет в _ate (раньше ночь tp=9 давала «завтрак»).
+    // Явный скип или долгий отрезок (от 6 ч) проживается по распорядку, шагами по часу:
+    // ночью спят, днём едят в обычные часы, пьют по жажде.
+    // Без skip= модель часто пропускает день через tp или новую дату — если там не кормить,
+    // день «без еды» запускал голодные болезни. Защиты от еды из ниоткуда на таком отрезке:
+    //   • приём пищи в последние 1,5 ч перед сценой не засчитываем — его обычно показывают в ответе;
+    //   • кто по тексту не ел (_why «не ела весь день», offscreen=hungry) — тех не кормим (см. fedOf).
     const routine = declaredSkip || hours >= 6;
-    const feedRoutine = declaredSkip;
+    const feedRoutine = routine;
     const opts = { healthFloor: isHard() ? null : 25 };
     let left = hours;
     // Если ИИ сам записал еду в конце отрезка, последний обед по распорядку и есть она —
@@ -403,7 +409,10 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
     const endAt = state.clockHours + hours;
     const lastMealAt = feedRoutine ? lastRoutineMeal(state.clockHours, endAt) : null;
     const nearEnd = lastMealAt != null && endAt - lastMealAt <= 3;
-    const skipLast = { user: loggedMeal.user && nearEnd, bot: loggedMeal.bot && nearEnd };
+    const atScene = lastMealAt != null && endAt - lastMealAt <= 1.5;
+    const skipLast = declaredSkip
+        ? { user: loggedMeal.user && nearEnd, bot: loggedMeal.bot && nearEnd }
+        : { user: atScene || loggedMeal.user, bot: atScene || loggedMeal.bot };   // еда из текста заменяет последний приём, а не добавляется
     const routineKcal = { user: 0, bot: 0 };
     ctx.slept = { user: 0, bot: 0 };
     ctx.woke = { user: false, bot: false };
@@ -444,7 +453,7 @@ function advanceTime(hours, activityOf, sleeping, fedOf, ctx, drinkOf = { user: 
                     applyMeal(c, portion, 8, g);
                     markMeal(c, portion, at);
                     routineKcal[ch.who] += portion;
-                    c.offEaten = (c.offEaten || 0) + portion;
+                    if (declaredSkip) c.offEaten = (c.offEaten || 0) + portion;   // «за кадром» для веса — только явный скип
                     // Обычный обед по распорядку — не обжорство
                     c.recentIntake = Math.min(c.recentIntake || 0, g * 0.4);
                     c.producedToday = true;   // обычное питание за кадром — с овощами; цинга только если в истории правда одно мясо
@@ -824,6 +833,8 @@ function addToHistory(who, items, calories, foods = []) {
     if (state.history.length > 40) state.history = state.history.slice(-40);
 }
 
+// «Не ела весь день», «нечего есть» — на длинном отрезке без skip= за кадром не кормим
+const NOT_ATE_RE = /(не\s+(?:ел[аи]?|поел[аи]?|ужинал[аи]?|обедал[аи]?|завтракал[аи]?|успел[аи]?\s+поесть|было\s+(?:еды|времени\s+поесть))(?!\p{L})|ничего\s+не\s+(?:ел[аи]?|съел[аи]?)(?!\p{L})|нечего\s+(?:есть|поесть)|без\s+еды|голодал[аи]?|на\s+пустой\s+желуд|hasn'?t\s+eaten|didn'?t\s+eat|no\s+food|without\s+food)/iu;
 const MORE_RE = /(ещё|еще|втор|добав|снова|опять|another|second|more|again|seconds)/i;
 function dropRepeats(who, foods) {
     if (!foods.length) return foods;
@@ -985,15 +996,26 @@ function processAiResponse(messageId) {
     let text = msg.mes;
     // 1) обычный тег-комментарий; 2) сохранённый для этого же текста;
     // 3) тег «не по форме» (строкой, в ```-блоке, без -->) — читаем и вырезаем из видимого текста
-    let tag = parseNnTag(text);
-    let tagSource = 'reply';   // 'reply' — тег от основной модели, 'fallback' — от запасного анализатора
-    if (!tag && msg.extra?.nn_tag?.inner && msg.extra.nn_tag.mesHash === hashText(text)) {
-        tag = parseNnInner(msg.extra.nn_tag.inner);
-        if (tag && msg.extra.nn_tag.source === 'fallback') tagSource = 'fallback';
+    // В режиме «отдельным запросом» тег берём только от помощника (из кэша); свой тег основной
+    // модели (по старой привычке из истории) вырезаем и не считаем
+    let tag = sideMode() ? null : parseNnTag(text);
+    let tagSource = 'reply';   // 'reply' — тег от основной модели, 'fallback' — запасной анализатор, 'side' — отдельный запрос
+    const cached = cachedTag(msg, text);
+    if (!tag && cached && (!sideMode() || cached.source === 'side')) {
+        tag = parseNnInner(cached.inner);
+        if (tag && cached.source) tagSource = cached.source;
     }
-    if (!tag) {
+    if (!tag && !sideMode()) {
         const inner = findNnInner(text, { loose: true });
         if (inner != null) tag = parseNnInner(inner);
+    }
+    if (sideMode()) {
+        const cleaned = stripLooseTag(String(text).replace(NN_COMMENT_RE, '')).trim();
+        if (cleaned && cleaned !== String(text).trim()) {
+            msg.mes = cleaned; text = cleaned;
+            if (Array.isArray(msg.swipes) && msg.swipe_id != null) msg.swipes[msg.swipe_id] = cleaned;
+            try { stModule?.updateMessageBlock?.(N, msg); } catch (e) { /* пусто */ }
+        }
     }
     if (tag) {
         // Видимые формы тега убираем из текста; правильный скрытый комментарий остаётся как образец формата
@@ -1005,14 +1027,11 @@ function processAiResponse(messageId) {
             try { stModule?.updateMessageBlock?.(N, msg); } catch (e) { /* пусто */ }
         }
     }
-    if (tag) {
-        msg.extra = msg.extra || {};
-        msg.extra.nn_tag = { inner: tag.inner, mesHash: hashText(text), ...(tagSource === 'fallback' ? { source: 'fallback' } : {}) };
-    }
+    if (tag && tagSource === 'reply') storeTag(msg, text, { inner: tag.inner });
     // Тега нет — готовим запрос запасному анализатору. Промпт собираем сейчас:
     // состояние ещё то, что было ДО этого ответа (снимок только что восстановлен).
     if (tag && analyzing.has(N)) { analyzing.get(N).ctrl?.abort(); analyzing.delete(N); }
-    const fallbackJob = !tag ? prepareFallback(N, text) : null;
+    const fallbackJob = !tag ? (sideMode() ? prepareSide(N, text) : prepareFallback(N, text)) : null;
     const ctx = newCtx();
 
     // ── Время: tp и time из тега; без тега — условные полчаса ──
@@ -1021,7 +1040,8 @@ function processAiResponse(messageId) {
     // Без тега время не угадываем: следующий ответ получит «догоняющую» приписку и покроет этот ход.
     let declaredSkip = tag?.skip != null && tag.skip > 0;
     let hours = tag ? (declaredSkip ? tag.skip : (tag.tp ?? (tag.clock != null ? null : 0))) : 0;
-    state.missedTag = tag ? 0 : (state.missedTag || 0) + 1;
+    // В режиме отдельного запроса «догоняющей» приписки нет: следующий запрос сам считает всё после последнего учтённого ответа
+    state.missedTag = tag || sideMode() ? 0 : (state.missedTag || 0) + 1;
     const clockBefore = state.clockHours ?? 12;
     if (tag) {
         const dPrev = rpDayNum(state.rpDate), dNew = rpDayNum(tag.date);
@@ -1089,6 +1109,10 @@ function processAiResponse(messageId) {
     // «утро → следующее утро с завтраком» теряло обед и ужин и считалось дефицитом.
     // Записанная еда заменяет только последний приём по распорядку (см. advanceTime).
     const fedOf = { user: offFed, bot: offFed };
+    // Длинный отрезок без skip=: кто по тексту не ел — за кадром не кормим
+    if (!declaredSkip && hours >= 6) {
+        for (const who of ['user', 'bot']) if (NOT_ATE_RE.test(tag?.[`${who}Why`] || '')) fedOf[who] = 0;
+    }
     const loggedMeal = { user: userFood.length > 0, bot: botFood.length > 0 };
     // Вода за кадром есть всегда, кроме offscreen=thirsty
     // Лёгкий режим: offscreen=thirsty — «пили мало», хард — «воды не было»
@@ -1189,14 +1213,15 @@ function processAiResponse(messageId) {
     const drinksFor = { user: userDrink, bot: botDrink };
     for (const ch of chars) {
         let note = makeFoodNote(ch.data, foodsFor[ch.who], drinksFor[ch.who], whyOf[ch.who]);
-        if (!note && fedOf[ch.who] && declaredSkip) {
+        if (!note && (ctx.routineKcal?.[ch.who] || 0) > 0) {
             note = { kind: 'off', text: ch.data.gender === 'female' ? 'Ела как обычно, за кадром' : ch.data.gender === 'male' ? 'Ел как обычно, за кадром' : 'Ели как обычно, за кадром' };
         }
         if (note) ch.data.foodNote = note;
     }
     // Калибровку засчитываем только по тегу основной модели: ответ без тега
     // и тег анализатора (он калибровку не делает) оставляют её на следующий ответ
-    if (tag && tagSource === 'reply' && (state.calibrate?.pending || state.calibrate?.doneAt === N)) {
+    const calibratedHere = tagSource === 'reply' || (tagSource === 'side' && !!(tag?.userProfile || tag?.botProfile));
+    if (tag && calibratedHere && (state.calibrate?.pending || state.calibrate?.doneAt === N)) {
         state.calibrate = { pending: false, doneAt: N };
     }
     if (tag?.userCare) state.user.careLeft = 12;
@@ -1312,7 +1337,7 @@ function processAiResponse(messageId) {
                 Math.floor(state.clockHours / 24) === dayBefore
                     ? r0((ch.data.burned || 0) - burnedBefore[ch.who])
                     : r0(burnPerHour(ch.data, activityOf[ch.who], sleeping) * hours)])),
-            offscreen: declaredSkip && !!(fedOf.user || fedOf.bot),
+            offscreen: (ctx.routineKcal?.user || 0) + (ctx.routineKcal?.bot || 0) > 0,
             weightDelta: {
                 user: +(state.user.weight - weightBefore.user).toFixed(3),
                 bot: bot ? +(bot.weight - (weightBefore.bot ?? bot.weight)).toFixed(3) : 0,
@@ -1429,6 +1454,243 @@ Answer with the single line <!-- NN … --> only, closed with -->.`;
     };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// УЧЁТ ОТДЕЛЬНЫМ ЗАПРОСОМ
+// После каждого ответа помощник (профиль Connection Manager или основное подключение) читает
+// новые сообщения и пишет тег; основная модель о теге не знает. Памяти у помощника нет —
+// её даёт учёт: часы, что съедено сегодня, беременность, состояния, пищевой профиль и три
+// прошлых тега. Считаются только [NEW]-сообщения (после последнего учтённого ответа),
+// остальное — контекст. Еда, питьё и прыжки времени — с цитатой из текста; цитаты нет в тексте —
+// запись отбрасывается. Плюс напряжённость сцены (scene) и редкая подсказка к следующему ответу (beat).
+// ═══════════════════════════════════════════════════════════════
+const SIDE_WAIT_MS = 20000;            // сколько придерживать начало генерации, пока помощник считает
+const SIDE_NEW_MAX = 6, SIDE_CTX_MSGS = 4;
+let sideErr = null;                    // { N, hash, why } — запрос упал: в инфоблоке «повторить»
+let ownRequest = false;                // идёт наш запрос через основное подключение
+
+const SCENES = ['calm', 'tense', 'critical'];
+// Напряжённость сцены и подсказка — из анализа последнего ответа (свой для каждого свайпа)
+function sideNow() {
+    if (!sideMode() || !state) return { scene: 'calm', beat: null };
+    const N = lastBotIndex();
+    const m = chat[N];
+    const rec = m ? cachedTag(m, m.mes) : null;
+    return rec?.source === 'side' ? { scene: SCENES.includes(rec.scene) ? rec.scene : 'calm', beat: rec.beat || null } : { scene: 'calm', beat: null };
+}
+
+const fmtClock = (abs) => { const h = hourOf(abs); return `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.round((h % 1) * 60) % 60).padStart(2, '0')}`; };
+
+// Память помощника о персонаже: одна строка
+function memoryLine(c, name, who) {
+    const g = c.gender === 'female' ? 'f' : c.gender === 'male' ? 'm' : '?';
+    const day = Math.floor((state.clockHours ?? 12) / 24);
+    const eaten = (state.history || []).filter(h => h.who === who && h.clock != null && Math.floor(h.clock / 24) === day)
+        .slice(-6).map(h => `${h.items.join(', ')} ${h.calories} kcal at ${fmtClock(h.clock)}`);
+    const preg = c.pregnant && c.pregnancyWeek ? ` · pregnant, week ${c.pregnancyWeek} (trimester ${getPregnancyStage(c.pregnancyWeek).trimester})` : '';
+    const fx = [...c.debuffs, ...c.buffs].map(e => e.id);
+    const ill = c.diseases.map(d => `${d.id}:${d.severity}${d.recovering ? ' (recovering)' : ''}`);
+    const f = c.food || {};
+    const food = profileEmpty(c) ? '' : ` · likes ${f.likes.join(', ') || '—'}; dislikes ${f.dislikes.join(', ') || '—'}; habits ${f.habits.join(', ') || '—'}`;
+    return `${name}: ${g}, ${c.age}y, ${(+c.weight).toFixed(1)}kg${preg} · satiety ${r0(c.satiety)}, water ${r0(c.water)}, energy ${r0(c.energy)} · last meal ${Math.round(c.hoursSinceLastMeal || 0)}h ago · eaten today: ${eaten.join('; ') || 'nothing yet'} (${r0(c.calories)}/${effectiveGoal(c)} kcal)${fx.length ? ` · effects ${fx.join(', ')}` : ''}${ill.length ? ` · illnesses ${ill.join(', ')}` : ''}${food}`;
+}
+
+// Последние учтённые теги до N — помощнику для продолжения времени и формата
+function recentTags(N, n = 3) {
+    const out = [];
+    for (let i = N - 1; i >= 0 && out.length < n; i--) {
+        const m = chat[i];
+        if (!m || m.is_user || m.is_system) continue;
+        const inner = cachedTag(m, m.mes)?.inner ?? parseNnTag(m.mes)?.inner;
+        if (inner) out.unshift(`<!-- NN ${String(inner).replace(/\s*\|\s*beat=[^|]*/g, '').trim()} -->`);
+    }
+    return out;
+}
+
+// Номер последнего учтённого ответа до N: всё после него — [NEW]
+function lastCountedBefore(N) {
+    for (let i = N - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (!m || m.is_user || m.is_system) continue;
+        if (cachedTag(m, m.mes) || parseNnTag(m.mes) || isGreeting(i)) return i;
+    }
+    return -1;
+}
+
+const sideTagTemplate = () => TAG_TEMPLATE.replace(' -->', ' | scene=calm|tense|critical | beat=NOTE -->');
+
+function prepareSide(N, text) {
+    const msg = chat[N];
+    if (!isEnabled() || !sideMode() || !msg || msg.is_user || msg.is_system || isGreeting(N)) return null;
+    if (N !== lastBotIndex()) return null;
+    const userName = getUserName(), botName = getBotName();
+    const bot = getBotState();
+    const from = lastCountedBefore(N);
+    const nameOf = (m) => (m.is_user ? userName : (m.name || botName));
+    const fresh = [];
+    for (let i = from + 1; i <= N; i++) {
+        const m = chat[i];
+        if (!m || m.is_system || !m.mes) continue;
+        fresh.push(`${nameOf(m)}: ${cleanForAnalyzer(i === N ? text : stripLooseTag(m.mes), i === N ? 6000 : 3000)}`);
+    }
+    const newText = fresh.slice(-SIDE_NEW_MAX);
+    const ctxMsgs = [];
+    for (let i = from; i >= 0 && ctxMsgs.length < SIDE_CTX_MSGS; i--) {
+        const m = chat[i];
+        if (!m || m.is_system || !m.mes) continue;
+        ctxMsgs.unshift(`${nameOf(m)}: ${cleanForAnalyzer(stripLooseTag(m.mes), 600)}`);
+    }
+    const clockLine = `Day ${Math.floor((state.clockHours ?? 12) / 24) + 1}, ${fmtClock(state.clockHours ?? 12)}${state.rpDate ? `, date ${state.rpDate}` : ''}${isHistorical() ? ' · pre-modern world' : ''}.`;
+    const tags = recentTags(N);
+    const needFood = activeChars().filter(ch => profileEmpty(ch.data)).length > 0;
+    const calib = !!state.calibrate?.pending;
+    const card = calib || needFood ? cardText(getCurrentBot()) : '';
+    const persona = calib || needFood ? personaText() : '';
+    const rules = tagFieldRules(userName, botName)
+        .replace(/your last reply/g, 'the last counted reply')
+        .replace(/in (\S+)'s last message and your reply/g, 'in the [NEW] messages')
+        .replace(/ — also on the reply where they wake/, '');
+    const system = `You are the bookkeeper of a roleplay nutrition tracker. You read the story and record what happened to two bodies. You never write story. Output exactly one line — the tag — and nothing else.
+
+[Tracker now — your memory; trust it]
+${clockLine}
+${memoryLine(state.user, userName, 'user')}${bot ? `\n${memoryLine(bot, botName, 'bot')}` : ''}${tags.length ? `\nLast counted tags (continue their time; their food is already counted):\n${tags.join('\n')}` : ''}
+
+[Tag]
+${sideTagTemplate()}
+user_ = ${userName} (player). bot_ = ${botName} only — other characters are never tracked.${bot ? '' : ' There is no bot_ character: write only user_ fields.'}
+Count ONLY the [NEW] messages. [CONTEXT] is already counted — use it only to understand the scene.
+CAPITALS = fill from the scene, copy nothing. Values in the roleplay's language; omit fields that don't apply.
+${rules}
+• EVIDENCE: right after every _ate and _drank item, after skip= and after tp above 2, put a short exact quote from the [NEW] text in «», e.g. user_ate=каша (миска):350 «доела кашу» | tp=9 «наутро». No quote in the text → it didn't happen: don't log it.
+• TIME comes from the text: a named hour, a part of the day, "наутро", "через час". Otherwise estimate tp from what was done (talk 0.1, a meal 0.5). Never invent a jump the text doesn't state.
+• scene = calm (ordinary moment) | tense (conflict, hurry, worry) | critical (labour or birth, injury, danger, a fight, grief, intimacy).
+• beat = optional, at most 15 words, English: one gentle food or body note for the next reply — only when scene=calm and genuinely timely (a mealtime passed and they haven't eaten, a pregnancy craving, a favourite food is at hand, clearly thirsty or tired). Usually omit it. Never in tense or critical scenes.${calib ? `\nONE-TIME CALIBRATION. ${calibrationRules(userName, botName)}` : needFood ? `\nONE-TIME: ${foodProfileRule()} Only for someone whose food profile isn't in your memory above.` : ''}
+Answer with the single line <!-- NN … --> only, closed with -->.`;
+    const user = [
+        card ? `[Character card — ${botName}]\n${card}` : '',
+        persona ? `[Persona — ${userName}]\n${persona}` : '',
+        ctxMsgs.length ? `[CONTEXT — already counted]\n${ctxMsgs.join('\n\n')}` : '',
+        `[NEW — count these]\n${newText.join('\n\n')}`,
+        'Write the tag.',
+    ].filter(Boolean).join('\n\n');
+    return {
+        N, hash: coreHash(text), side: true, profileId: profileExists(fallbackProfile()) ? fallbackProfile() : null,
+        chat: chatEpoch, gen: genEpoch, newText: newText.join('\n\n'),
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    };
+}
+
+// Записи лорбука, сработавшие бы на новые сообщения (пробный проход, без побочных эффектов)
+async function loreFor(text, limit = 800) {
+    try {
+        const c = stCtx();
+        if (!c?.getWorldInfoPrompt || !String(text || '').trim()) return '';
+        const wi = await c.getWorldInfoPrompt([String(text)], 8192, true);
+        return clip(macros(wi?.worldInfoString || `${wi?.worldInfoBefore || ''}\n${wi?.worldInfoAfter || ''}`), limit);
+    } catch { return ''; }
+}
+
+// ─── Проверка цитат: выдуманное не проходит ───
+const normQ = (t) => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\d]+/gu, ' ').trim();
+function quoteFound(q, hay) {
+    const n = normQ(q);
+    if (!n) return false;
+    if (hay.includes(n)) return true;
+    const words = n.split(' ').filter(w => w.length >= 3);
+    if (!words.length) return false;
+    const hit = words.filter(w => hay.includes(w.slice(0, Math.max(3, w.length - 2)))).length;   // окончания могут отличаться
+    return hit / words.length >= 0.7;
+}
+// Без цитаты — хотя бы основа названия блюда должна быть в тексте
+function nameFound(item, hay) {
+    const words = normQ(String(item).replace(/\([^)]*\)/g, ' ')).split(' ').filter(w => w.length >= 4);
+    return words.some(w => hay.includes(w.slice(0, Math.max(4, w.length - 2))));
+}
+const TIME_CUE_RE = /(утр|наутро|ночь|ночью|вечер|днём|днем|полдень|полноч|спустя|через|позже|прошл|минул|недел|месяц|год|час|сутк|рассвет|закат|morning|night|evening|noon|later|hour|day|week|month|dawn|dusk)/iu;
+
+function splitItems(v) {
+    const out = [];
+    let cur = '', par = 0, q = 0;
+    for (const ch of String(v)) {
+        if (ch === '(') par++;
+        else if (ch === ')') par = Math.max(0, par - 1);
+        else if (ch === '«') q++;
+        else if (ch === '»') q = Math.max(0, q - 1);
+        if ((ch === ',' || ch === ';') && !par && !q) { out.push(cur); cur = ''; continue; }
+        cur += ch;
+    }
+    if (cur.trim()) out.push(cur);
+    return out.map(x => x.trim()).filter(Boolean);
+}
+
+/** Чистит тег помощника: цитаты сверяет с текстом и убирает; выдуманное отбрасывает */
+function checkEvidence(inner, newText) {
+    const hay = normQ(newText);
+    const dropped = [];
+    const fields = String(inner).split('|').map(x => x.trim()).filter(Boolean);
+    let scene = null, beat = null;
+    const kept = [];
+    for (const f of fields) {
+        const eq = f.indexOf('=');
+        if (eq < 0) { kept.push(f); continue; }
+        const key = f.slice(0, eq).trim().toLowerCase();
+        let val = f.slice(eq + 1).trim();
+        if (key === 'scene') { scene = SCENES.find(x => val.toLowerCase().startsWith(x)) || null; continue; }
+        if (key === 'beat') { beat = val.replace(/«[^»]*»/g, '').trim().slice(0, 160) || null; continue; }
+        if (/^(user|bot)_(ate|drank)$/.test(key)) {
+            const items = splitItems(val).filter(it => {
+                const qm = it.match(/«([^»]*)»/);
+                const ok = qm ? quoteFound(qm[1], hay) : nameFound(it.split(':')[0], hay);
+                if (!ok) dropped.push(`${key}: ${it}`);
+                return ok;
+            }).map(it => it.replace(/\s*«[^»]*»\s*/g, ' ').trim());
+            if (items.length) kept.push(`${key}=${items.join(', ')}`);
+            continue;
+        }
+        if (key === 'skip' || key === 'tp') {
+            const qm = val.match(/«([^»]*)»/);
+            const clean = val.replace(/\s*«[^»]*»\s*/g, ' ').trim();
+            const num = parseFloat(clean);
+            const big = key === 'skip' || (Number.isFinite(num) && num > 2);
+            const ok = !big || (qm ? quoteFound(qm[1], hay) : TIME_CUE_RE.test(newText));
+            if (!ok) {
+                dropped.push(`${key}=${clean}`);
+                if (key === 'tp') kept.push('tp=0.5');     // прыжка в тексте нет — обычный ход
+                continue;
+            }
+            kept.push(`${key}=${clean}`);
+            continue;
+        }
+        kept.push(`${key}=${val.replace(/\s*«[^»]*»\s*/g, ' ').trim()}`);
+    }
+    // Время назад/вперёд без опоры в тексте не двигаем: если прыжок отброшен — и time= тоже
+    let out = kept;
+    if (dropped.some(d => /^(skip|tp)=/.test(d))) out = out.filter(f => !/^(time|sleeping)=/.test(f));
+    if (dropped.length) console.warn('[NN] помощник: без опоры в тексте, не считаю —', dropped);
+    return { inner: out.join(' | '), scene, beat, dropped };
+}
+
+/** Повторный пересчёт с ответа N и всех следующих (результат пришёл, когда чат уже ушёл вперёд) */
+function replayFrom(N) {
+    state.snapshots = state.snapshots.filter(s => s.beforeMsg <= N);
+    processAiResponse(N);
+    for (let i = N + 1; i < chat.length; i++) {
+        const m = chat[i];
+        if (m && !m.is_user && !m.is_system && m.mes) processAiResponse(i);
+    }
+}
+
+function mainProfileId() {
+    try { return stCtx()?.extensionSettings?.connectionManager?.selectedProfile || null; } catch { return null; }
+}
+
+async function askAnalyzer(job, signal) {
+    const [sys, usr] = job.messages;
+    if (job.profileId) return askProfile(job.profileId, job.messages, FALLBACK_MAX_TOKENS, signal);
+    ownRequest = true;
+    try { return await askMain(sys.content, usr.content, FALLBACK_MAX_TOKENS); } finally { ownRequest = false; }
+}
+
 function setAnalyzing(N, on) {
     if (on) analyzing.set(N, analyzing.get(N) || {});
     else analyzing.delete(N);
@@ -1440,18 +1702,39 @@ function abortFallbacks() {
     for (const [N, job] of analyzing) { job.ctrl?.abort(); setAnalyzing(N, false); }
 }
 
-async function runFallback(job) {
+function runFallback(job) {
     analyzing.get(job.N)?.ctrl?.abort();
     const ctrl = new AbortController();
-    analyzing.set(job.N, { ctrl });
+    const rec = { ctrl, promise: null };
+    analyzing.set(job.N, rec);
+    if (sideErr?.N === job.N) sideErr = null;
     setAnalyzing(job.N, true);
+    rec.promise = runAnalysis(job, ctrl).catch(e => console.warn('[NN] анализ:', e));
+    return rec.promise;
+}
+
+async function runAnalysis(job, ctrl) {
     const timer = setTimeout(() => ctrl.abort(), FALLBACK_TIMEOUT);
-    let inner = null;
+    let inner = null, extra = {}, why = null;
     try {
-        const out = await askProfile(job.profileId, job.messages, FALLBACK_MAX_TOKENS, ctrl.signal);
+        if (job.side) {
+            // Тот же API, что у основной модели: дадим передохнуть после ответа, чтобы не упереться в лимит
+            if (!job.profileId || job.profileId === mainProfileId()) await new Promise(r => setTimeout(r, 2500));
+            if (ctrl.signal.aborted) throw new Error('отменён');
+            const lore = await loreFor(job.newText);
+            if (lore) job.messages[0].content = job.messages[0].content.replace('\n\n[Tag]', `\n\n[World notes — setting, foods, customs]\n${lore}\n\n[Tag]`);
+        }
+        const out = job.side ? await askAnalyzer(job, ctrl.signal) : await askProfile(job.profileId, job.messages, FALLBACK_MAX_TOKENS, ctrl.signal);
         inner = extractAnalyzerTag(out);
-        if (inner == null) console.warn('[NN] анализатор: в ответе нет тега', out);
+        if (inner == null) { why = 'в ответе нет тега'; console.warn('[NN] анализатор: в ответе нет тега', out); }
+        else if (job.side) {
+            const chk = checkEvidence(inner, job.newText);
+            inner = chk.inner;
+            extra = { scene: chk.scene, beat: chk.beat };
+            if (!parseNnInner(inner)) { why = 'тег не читается'; inner = null; }
+        }
     } catch (e) {
+        why = ctrl.signal.aborted ? (why || 'нет ответа') : reasonText(e);
         if (analyzing.get(job.N)?.ctrl === ctrl) console.warn('[NN] анализатор: ошибка запроса', e);
     } finally {
         clearTimeout(timer);
@@ -1460,15 +1743,46 @@ async function runFallback(job) {
     if (analyzing.get(job.N)?.ctrl !== ctrl) return;
     setAnalyzing(job.N, false);
     const msg = chat[job.N];
-    const fresh = state && msg && job.chat === chatEpoch && job.gen === genEpoch
-        && job.N === lastBotIndex() && hashText(msg.mes) === job.hash;
-    if (!fresh) return;
-    if (inner == null) { fallbackFailed.add(job.hash); return; }
+    if (!state || !msg || job.chat !== chatEpoch) return;
+    if (job.side) {
+        // Текст уже другой (свайп, правка) — результат не к месту. Картинки и обёртки отпечаток не меняют
+        if (coreHash(msg.mes) !== job.hash) { console.info('[NN] помощник: текст ответа изменился — результат отброшен'); return; }
+    } else if (!(job.gen === genEpoch && job.N === lastBotIndex() && hashText(msg.mes) === job.hash)) return;
 
-    msg.extra = msg.extra || {};
-    msg.extra.nn_tag = { inner: String(inner).trim(), mesHash: job.hash, source: 'fallback' };
-    processAiResponse(job.N);   // откат к снимку и пересчёт уже с тегом
+    if (inner == null) {
+        if (job.side) {
+            sideErr = { N: job.N, hash: job.hash, why: why || 'ошибка' };
+            renderBlock(job.N);
+            toast('warning', `Учёт не посчитался (${sideErr.why}). Нажмите ↻ в инфоблоке или продолжайте — следующий ответ посчитает и этот.`);
+        } else fallbackFailed.add(job.hash);
+        return;
+    }
+    storeTag(msg, msg.mes, { inner: String(inner).trim(), source: job.side ? 'side' : 'fallback', ...extra });
+    console.log(`[NN] ${job.side ? 'помощник' : 'анализатор'}: тег для #${job.N}`, inner, extra.scene ? `· сцена ${extra.scene}` : '', extra.beat ? `· подсказка: ${extra.beat}` : '');
+    // Чат успел уйти вперёд (ждать перестали) — пересчитываем и следующие ответы
+    if (job.N < lastProcessedMsg()) replayFrom(job.N);
+    else processAiResponse(job.N);
+    injectPrompt();
     flashDone(job.N);
+}
+
+function reasonText(e) {
+    const chain = [];
+    for (let x = e; x && chain.length < 3; x = x.cause) {
+        const m = x?.error?.message || x?.message || (typeof x === 'string' ? x : '');
+        if (m && !chain.includes(m)) chain.push(m);
+    }
+    return (chain.join(' → ') || 'ошибка').replace(/^Error:\s*/, '').slice(0, 120);
+}
+
+/** Повторить отдельный запрос для последнего ответа (кнопка ↻) */
+function retrySide() {
+    const N = lastBotIndex();
+    const msg = chat[N];
+    if (!msg || !state) return;
+    sideErr = null;
+    // Пересчёт ответа сам соберёт и отправит запрос (тега в кэше нет)
+    processAiResponse(N);
 }
 
 function flashDone(N) {
@@ -1642,8 +1956,26 @@ function mealPromptLine(c, name, isUser) {
 }
 
 // ─── 1. Состояние персонажей (глубина 4): что сейчас с телами ───
+// Критическая сцена (роды, бой, опасность, горе, близость): только физические ограничения, без еды и вкусов
+function buildCriticalPrompt() {
+    const u = state.user, b = getBotState();
+    const limits = (c) => {
+        const fx = c.debuffs.filter(e => !EFFECT_INFO[e.id]?.mental).map(e => EFFECT_INFO[e.id]?.prompt).filter(Boolean);
+        const ill = c.diseases.filter(d => DISEASE_DB[d.id]?.category !== 'mental' && d.severity !== 'mild' && !d.recovering)
+            .map(d => `${DISEASE_DB[d.id]?.nameEn || d.id} (${d.severity})`);
+        const all = [...ill, ...fx].filter(x => !/hungry|thirsty|craving|appetite/i.test(x));
+        return all.length ? all.join('; ') : 'no physical limits';
+    };
+    const lines = [`${getUserName()} (player): ${limits(u)}`];
+    if (b) lines.push(`${getBotName()}: ${limits(b)}`);
+    return `[Physiology — critical moment] Food, drink, tastes, hunger and these states stay out of the reply entirely; only what the bodies physically can't do matters.
+${lines.join('\n')}
+${getUserName()} is the player's character: never write their words, thoughts, feelings or actions.`;
+}
+
 function buildStatePrompt() {
     if (!state) return '';
+    if (sideMode() && sideNow().scene === 'critical') return buildCriticalPrompt();
     const u = state.user, b = getBotState();
     const userName = getUserName();
     const blocks = [charPromptBlock(u, userName, true)];
@@ -1687,7 +2019,7 @@ function tagFieldRules(userName, botName) {
     const u = state.user, b = getBotState();
     const preg = [pregQuestion(u, userName, 'user'), pregQuestion(b, botName, 'bot')].filter(Boolean);
     return [
-        `• tp = in-world hours since your last reply (talk 0.1, a meal 0.5, a night 8); time = clock now. sleeping=true if they slept through most of that span — also on the reply where they wake. A jump ("a week later", *skip*) → skip=DURATION; off-screen meals and sleep are automatic. Without skip= nobody eats off-screen: a meal mentioned after a night or a time jump (\"после завтрака\") goes in _ate.`,
+        `• tp = in-world hours since your last reply (talk 0.1, a meal 0.5, a night 8); time = clock now. sleeping=true if they slept through most of that span — also on the reply where they wake. A jump (\"a week later\", *skip*) → skip=DURATION. On any jump of 6+ hours off-screen meals and sleep are automatic; if they did NOT eat during it, say so in _why.`,
         `• _activity, always both: low (sit, talk, eat, rest) | medium (walk, chores, cook, ride) | high (run, fight, haul, heavy work).`,
         `• _ate = everything eaten in ${userName}'s last message and your reply, each as a new portion — passing mentions too ("перекусили по дороге", "после ужина"), and a second meal right after the first. Earlier tags are already counted: never drop something because it looks like an earlier entry, but never re-log food eaten before — licking fingers, an aftertaste, a full belly or remembering the meal is not new eating. Same bite in both messages → once. FOOD (HOW):KCAL — HOW = how much and how, a few words ("всю миску", "пару ложек через силу"); KCAL = a quick round guess, no arithmetic (a taste or lick 10, bread slice 100, porridge 350, pie slice 350, soup with bread 450, stew 700, feast 1000+). Nothing eaten → omit; never "ничего"/0.`,
         `• _drank — same rule: DRINK (HOW):ML:KCAL (sip 30, cup 250, mug 350, pint 500); KCAL only if caloric; drinks never in _ate.`,
@@ -1772,7 +2104,27 @@ function injectPrompt() {
     setExtensionPrompt(PROMPT_KEY, on ? buildStatePrompt() : '', extension_prompt_types.IN_CHAT, 4, true, extension_prompt_roles.SYSTEM);
     // Для chat completion правило тега ставится в самый конец готового промпта (onPromptReady),
     // для остальных API — обычным инджектом на глубине 0
-    setExtensionPrompt(PROMPT_KEY_TAG, on && !isChatCompletion() ? buildTagPrompt() : '', extension_prompt_types.IN_CHAT, 0, true, extension_prompt_roles.SYSTEM);
+    setExtensionPrompt(PROMPT_KEY_TAG, on && !isChatCompletion() ? buildTailPrompt() : '', extension_prompt_types.IN_CHAT, 0, true, extension_prompt_roles.SYSTEM);
+}
+
+// Конец промпта: правило тега — или, в режиме отдельного запроса, только мягкие подсказки,
+// и то лишь в спокойной сцене (в напряжённой и критической — ничего о еде)
+function buildTailPrompt() {
+    if (!state) return '';
+    if (!sideMode()) return buildTagPrompt();
+    const { scene, beat } = sideNow();
+    if (scene !== 'calm') return '';
+    const userName = getUserName(), botName = getBotName();
+    const u = state.user, b = getBotState();
+    const lines = [
+        ...buildBeats(u, userName, { isUser: true, botName }),
+        ...(b ? buildBeats(b, botName, { isUser: false }) : []),
+        ...(beat ? [`• ${beat}`] : []),
+    ];
+    if (!lines.length) return '';
+    return `[Small detail for this reply]
+Work it in once, in a sentence or a gesture, only if it fits naturally — mid-scene, not as the topic; skip it if the moment is wrong, and don't return to it later.
+${lines.join('\n')}`;
 }
 
 /**
@@ -1811,7 +2163,7 @@ function onPromptReady(eventData) {
     if (!Array.isArray(list)) return;
     stripOldTagsFromMessages(list);
     if (eventData.dryRun) return;
-    const text = buildTagPrompt();
+    const text = buildTailPrompt();
     if (!text) return;
     let at = list.length;
     while (at > 0 && list[at - 1]?.role === 'assistant') at--;
@@ -1832,6 +2184,37 @@ function hashText(t) {
     const s = String(t || '');
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
     return h;
+}
+/**
+ * Отпечаток самого текста ответа — без картинок, разметки, комментариев и пробелов.
+ * Расширения картинок и оформления дописывают в сообщение <img>, обёртки и т. п.;
+ * от этого отпечаток не меняется, и ответ не анализируется повторно.
+ */
+function coreHash(t) {
+    return hashText(String(t || '')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ').trim());
+}
+// Тег к этому тексту из кэша сообщения: отдельный запрос хранит до 4 вариантов (свайпы)
+function cachedTag(msg, text) {
+    const ch = coreHash(text), h = hashText(text);
+    const rec = msg?.extra?.nn_tags?.[ch];
+    if (rec?.inner) return rec;
+    const one = msg?.extra?.nn_tag;
+    if (one?.inner && (one.mesHash === h || one.mesHash === ch)) return one;
+    return null;
+}
+function storeTag(msg, text, rec) {
+    msg.extra = msg.extra || {};
+    const ch = coreHash(text);
+    msg.extra.nn_tag = { ...rec, mesHash: ch };
+    const map = { ...(msg.extra.nn_tags || {}) };
+    map[ch] = { ...rec, mesHash: ch };
+    const keys = Object.keys(map);
+    if (keys.length > 4) delete map[keys[0]];
+    msg.extra.nn_tags = map;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1912,14 +2295,15 @@ function renderBlock(id) {
     block.classList.toggle('nn-open', open);
     block.classList.toggle('nn-live', live);
     const busy = analyzing.has(id);
+    const failed = live && sideMode() && sideErr?.N === id && !busy;
     block.classList.toggle('nn-analyzing', busy);
-    if (busy) block.title = 'Анализатор восстанавливает данные по сцене…';
+    if (busy) block.title = sideMode() ? 'Помощник считает ответ…' : 'Анализатор восстанавливает данные по сцене…';
     else block.removeAttribute('title');
 
     let tab = ui.tab.get(id) || 'overview';
     if (!live && TABS.find(t => t.id === tab)?.live) tab = 'overview';
 
-    block.innerHTML = headHtml(snap, open, busy) + (open ? bodyHtml(snap, live, tab) : '');
+    block.innerHTML = headHtml(snap, open, busy, failed ? sideErr.why : null) + (open ? bodyHtml(snap, live, tab) : '');
 }
 
 // ─── Где стоит инфоблок: под текстом или над ним ───
@@ -2038,12 +2422,13 @@ function turnKcal(turn) {
         .reduce((a, x) => a + (x.calories || 0), 0);
 }
 
-function headHtml(snap, open, busy = false) {
+function headHtml(snap, open, busy = false, failWhy = null) {
     // Раскрытый блок: отдельной шапки нет — кнопка «свернуть» стоит в строке вкладок
     if (open) return '';
     return `<div class="nn-head" role="button" tabindex="0" data-act="toggle" aria-expanded="false">
         <span class="nn-people">${personChip(snap.user, 'user')}${snap.bot ? personChip(snap.bot, 'bot') : ''}</span>
-        ${busy ? '<span class="nn-an-badge" aria-label="Анализ"><i class="fa-solid fa-wand-magic-sparkles"></i><span class="nn-an-dots"><i></i><i></i><i></i></span></span>' : ''}
+        ${busy ? `<span class="nn-an-badge" aria-label="Считаю"><i class="fa-solid fa-feather-pointed"></i><span class="nn-an-label">${sideMode() ? 'считаю' : 'анализ'}</span><span class="nn-an-dots"><i></i><i></i><i></i></span></span>` : ''}
+        ${failWhy ? `<i class="fa-solid fa-rotate-right nn-an-retry" role="button" tabindex="0" data-act="an-retry" title="${esc(`Учёт не посчитался: ${failWhy}. Нажмите, чтобы повторить`)}"></i>` : ''}
         <i class="fa-solid fa-chevron-down nn-chev"></i>
     </div>`;
 }
@@ -2379,6 +2764,12 @@ function rpDeltaNote() {
     return parts.length ? ` <span class="nn-mute">(${parts.join(' · ')})</span>` : ' <span class="nn-mute">(пока без изменений)</span>';
 }
 
+function analyzerHint() {
+    return sideMode()
+        ? 'Профиль помощника — для учёта и «Пересчитать по карточкам». Не выбран — основное подключение (с паузой 2,5 с).'
+        : 'Этот же профиль — для «Пересчитать по карточкам». Не выбран — основное подключение.';
+}
+
 function recalcVia() {
     const id = fallbackProfile();
     if (profileExists(id)) return `через профиль «${esc(cmProfiles().profiles.find(p => p.id === id)?.name || id)}»`;
@@ -2669,6 +3060,7 @@ function bindBlock(block) {
             case 'card': ui.cardOpen[t.dataset.who] = !ui.cardOpen[t.dataset.who]; break;
             case 'state': ui.stateOpen[t.dataset.who] = !ui.stateOpen[t.dataset.who]; break;
             case 'reanalyze': reanalyze(); return;
+            case 'an-retry': e.stopPropagation(); retrySide(); return;
             default: return;
         }
         renderBlock(id);
@@ -2796,7 +3188,11 @@ function injectSettingsPanel() {
 
                 <div class="nn-set-group nn-an" id="nn-an-group">
                     <div class="nn-set-title">Анализатор</div>
-                    ${sw('nn-set-fallback', fallbackOn(), 'Восстанавливать тег, если его нет')}
+                    <div class="nn-opts">
+                        ${tile('nn-track', 'reply', !sideMode(), 'fa-comment-dots', 'В ответе модели', 'Модель сама пишет скрытый тег в конце ответа')}
+                        ${tile('nn-track', 'side', sideMode(), 'fa-feather-pointed', 'Отдельным запросом', 'Тег пишет помощник; основной промпт легче, в ответах тегов нет')}
+                    </div>
+                    <div class="nn-fallback-row"${sideMode() ? ' hidden' : ''}>${sw('nn-set-fallback', fallbackOn(), 'Восстанавливать тег, если его нет')}</div>
                     <div class="nn-an-row">
                         <span class="nn-an-pick">
                             <span class="nn-an-ico" aria-hidden="true"><i class="fa-solid fa-plug"></i></span>
@@ -2807,7 +3203,7 @@ function injectSettingsPanel() {
                         <div id="nn-an-check" class="menu_button nn-an-btn" role="button" tabindex="0" title="Проверить подключение"><i class="fa-solid fa-satellite-dish"></i></div>
                     </div>
                     <div class="nn-an-status" id="nn-an-status" hidden></div>
-                    <div class="nn-set-hint">Этот же профиль — для «Пересчитать по карточкам». Не выбран — основное подключение.</div>
+                    <div class="nn-set-hint" id="nn-an-hint">${analyzerHint()}</div>
                 </div>
 
                 <div class="nn-set-actions">
@@ -2830,6 +3226,19 @@ function injectSettingsPanel() {
         root.addEventListener('change', e => {
             const t = e.target;
             if (t.type !== 'radio') return;
+            if (t.name === 'nn-track') {
+                localStorage.setItem(LS.track, t.value);
+                const row = root.querySelector('.nn-fallback-row');
+                if (row) row.hidden = sideMode();
+                const hint = root.querySelector('#nn-an-hint');
+                if (hint) hint.textContent = analyzerHint();
+                document.getElementById('nn-an-group')?.classList.toggle('nn-an-on', fallbackOn() || sideMode());
+                if (!state) loadState();
+                sideErr = null;
+                injectPrompt();
+                scheduleRenderAll();
+                return;
+            }
             if (t.name === 'nn-mode') {
                 localStorage.setItem(LS.mode, t.value);
                 setHungerCap(!isHard());
@@ -2926,7 +3335,7 @@ function fillProfiles() {
     }
     sel.value = cur && [...sel.options].some(o => o.value === cur) ? cur : '';
     const has = status === 'ok' && profileExists(cur);
-    group.classList.toggle('nn-an-on', fallbackOn());
+    group.classList.toggle('nn-an-on', fallbackOn() || sideMode());
     group.classList.toggle('nn-an-has', has);
     document.getElementById('nn-an-check')?.classList.toggle('disabled', !has);
 
@@ -3000,13 +3409,29 @@ function markUserSpoke() {
     if (showMode() === 'after') scheduleRenderAll();
 }
 
-function onGenerationStarted(type, params, dryRun) {
+async function onGenerationStarted(type, params, dryRun) {
     if (dryRun) return;
+    if (ownRequest && type === 'quiet') return;     // наш же запрос через основное подключение
     generating = true;
     if (!isEnabled()) return;
     if (!state) loadState();
+    if (sideMode() && type !== 'quiet') {
+        const last = lastBotIndex();
+        const job = analyzing.get(last);
+        if (['swipe', 'regenerate', 'continue'].includes(type)) {
+            // этот ответ сейчас заменят или допишут — его подсчёт не нужен
+            job?.ctrl?.abort(); if (job) setAnalyzing(last, false);
+        } else if (job?.promise) {
+            // Ответ на него ещё не посчитан — придерживаем генерацию, пока помощник не закончит:
+            // иначе следующий ответ пишется по старому состоянию. Не успел — идём дальше, результат применится позже
+            const t0 = Date.now();
+            await Promise.race([job.promise, new Promise(r => setTimeout(r, SIDE_WAIT_MS))]);
+            console.log(`[NN] ждали помощника ${((Date.now() - t0) / 1000).toFixed(1)} с${analyzing.has(last) ? ' — не успел, применится позже' : ''}`);
+        }
+    }
     // Настоящая генерация (не фоновая quiet от других расширений) делает запросы анализатора устаревшими
-    if (type !== 'quiet') { genEpoch++; abortFallbacks(); markUserSpoke(); }
+    // (в режиме отдельного запроса — нет: его результат нужен и позже)
+    if (type !== 'quiet') { genEpoch++; if (!sideMode()) abortFallbacks(); markUserSpoke(); }
     const regen = ['swipe', 'regenerate', 'continue'].includes(type);
     calibrateNow = !!state.calibrate?.pending || (regen && state.calibrate?.doneAt === lastBotIndex());
     injectPrompt();

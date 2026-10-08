@@ -55,7 +55,15 @@ function ensureGut(c, goal) {
 
 // Здоровье восстанавливается +1%/час если всё хорошо, падает если голод/болезнь
 export const HEALTH_REGEN_PER_HOUR = 0.8;
-export const HEALTH_LOSS_PER_HOUR_STARVING = 3;
+export const HEALTH_LOSS_PER_HOUR_STARVING = 3;   // не используется: см. fastingHealthLoss
+// Голодание с водой человек переживает неделями: первые трое суток здоровье не падает,
+// дальше всё быстрее. Сумма — около 60 к двум неделям, ноль — примерно к 17-м суткам.
+export function fastingHealthLoss(hoursNoFood) {
+    if (hoursNoFood < 72) return 0;
+    if (hoursNoFood < 168) return 0.12;
+    if (hoursNoFood < 336) return 0.3;
+    return 0.6;
+}
 export const HEALTH_LOSS_PER_HOUR_DEHYDRATED = 4;
 
 // Утечка здоровья/энергии от болезней (в час), масштабируется по тяжести.
@@ -67,6 +75,9 @@ export const DISEASE_DRAIN = {
     severe:   { health: 4.5, energy: 5.5 },
     critical: { health: 8.0, energy: 8.0 },
 };
+
+const NO_DRAIN = new Set(['food_obsession', 'hunger_apathy', 'food_insecurity']);
+const HUNGER_FAMILY = new Set(['hypoglycemia', 'starvation', 'malnutrition']);
 
 // Утечка здоровья от дебаффов (в час) — раньше дебаффы не трогали здоровье вообще
 export const DEBUFF_HEALTH_DRAIN = {
@@ -166,6 +177,7 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     let energyMult = 1.0, waterMult = 1.0, satietyMult = 1.0;
 
     if (has(charData.debuffs, 'hunger'))      energyMult += 0.20;
+    if (has(charData.debuffs, 'hunger_weak')) energyMult += 0.10;
     if (has(charData.debuffs, 'exhaustion'))  energyMult += 0.30;
     if (has(charData.debuffs, 'dehydration')) energyMult += 0.15;
     if (has(charData.debuffs, 'overeating'))  energyMult += 0.10;
@@ -238,14 +250,25 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     }
 
     // ─── Урон от болезней и дебаффов ───
-    let diseaseHealthDrain = 0, diseaseEnergyDrain = 0;
+    // Душевные состояния (мысли о еде, апатия, тревожность) тело не истощают.
+    // Голод — одна беда, а не три: из голодных болезней тянет силы только самая тяжёлая.
+    let diseaseHealthDrain = 0, diseaseEnergyDrain = 0, hungerH = 0, hungerE = 0;
     for (const d of (charData.diseases || [])) {
+        if (NO_DRAIN.has(d.id)) continue;
         const drain = DISEASE_DRAIN[d.severity];
         if (!drain) continue;
         const mult = d.recovering ? 0.4 : 1;
+        if (HUNGER_FAMILY.has(d.id)) {
+            // Здоровье при голоде отнимает кривая голодания (fastingHealthLoss), не каждая болезнь;
+            // силы — вполовину, а когда уже поели и идёт выздоровление — совсем немного
+            hungerE = Math.max(hungerE, drain.energy * 0.5 * (d.recovering ? 0.3 : 1));
+            continue;
+        }
         diseaseHealthDrain += drain.health * mult;
         diseaseEnergyDrain += drain.energy * mult;
     }
+    diseaseHealthDrain += hungerH;
+    diseaseEnergyDrain += hungerE;
     let debuffHealthDrain = 0;
     for (const deb of (charData.debuffs || [])) {
         const dmg = DEBUFF_HEALTH_DRAIN[deb.id];
@@ -261,7 +284,7 @@ export function tickTime(charData, hours, activity = 'low', sleeping = false, go
     const hasHealthThreat = diseaseHealthDrain > 0 || debuffHealthDrain > 0;
 
     if (isStarving) {
-        charData.health = Math.max(0, charData.health - HEALTH_LOSS_PER_HOUR_STARVING * hours);
+        charData.health = Math.max(0, charData.health - fastingHealthLoss(charData.hoursSinceLastMeal || 0) * hours);
         events.push('starving');
     }
     if (isDehydrated) {

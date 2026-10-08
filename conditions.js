@@ -9,6 +9,7 @@ import { EFFECT_INFO, effectLevel, toggleEffect, grantEffect, hasEffect, seededC
 // ═══════════════════════════════════════════════════════════════
 
 export const DISEASE_DB = {
+    // Только хардкор: у здорового человека голод почти не роняет сахар — в лёгком режиме вместо неё «Слабость от голода»
     hypoglycemia: {
         id: 'hypoglycemia',
         nameRu: 'Гипогликемия',
@@ -16,28 +17,28 @@ export const DISEASE_DB = {
         category: 'physical',
         stages: {
             mild: {
-                threshold: { hoursSinceLastMeal: 8, reserve: 100 },
+                threshold: { hoursSinceLastMeal: 30, reserve: 0 },
                 effects: ['Лёгкое головокружение', 'Раздражительность'],
                 effectsEn: ['Mild dizziness', 'Irritability'],
                 modifiers: { energy: -5, focus: -10 },
                 symptoms: 'Slight tremor in hands, difficulty concentrating, craving sweets.',
             },
             moderate: {
-                threshold: { hoursSinceLastMeal: 14, reserve: 0 },
+                threshold: { hoursSinceLastMeal: 42, reserve: 0 },
                 effects: ['Головокружение', 'Слабость', 'Тремор'],
                 effectsEn: ['Dizziness', 'Weakness', 'Tremor'],
                 modifiers: { energy: -15, focus: -25, physical: -15 },
                 symptoms: 'Visible hand tremor, cold sweat, pale skin, trouble speaking clearly.',
             },
             severe: {
-                threshold: { hoursSinceLastMeal: 22, reserve: 0 },
+                threshold: { hoursSinceLastMeal: 60, reserve: 0 },
                 effects: ['Сильное головокружение', 'Спутанность', 'Обморок'],
                 effectsEn: ['Severe dizziness', 'Confusion', 'Fainting risk'],
                 modifiers: { energy: -30, focus: -50, physical: -40 },
                 symptoms: 'Stumbling, slurred speech, visual disturbances, risk of losing consciousness.',
             },
             critical: {
-                threshold: { hoursSinceLastMeal: 36, reserve: 0 },
+                threshold: { hoursSinceLastMeal: 84, reserve: 0 },
                 effects: ['Потеря сознания', 'Судороги', 'Кома'],
                 effectsEn: ['Loss of consciousness', 'Seizures', 'Coma risk'],
                 modifiers: { energy: -60, focus: -80, physical: -70 },
@@ -45,7 +46,7 @@ export const DISEASE_DB = {
             },
         },
         cure: { satiety: 40, reserve: 200 },
-        recovery: { mild: 1, moderate: 3, severe: 8, critical: 24 },
+        recovery: { mild: 0.5, moderate: 1, severe: 3, critical: 12 },   // поели — сахар выравнивается быстро
 
     },
 
@@ -56,28 +57,28 @@ export const DISEASE_DB = {
         category: 'physical',
         stages: {
             mild: {
-                threshold: { hoursSinceLastMeal: 24 },
+                threshold: { hoursSinceLastMeal: 48 },
                 effects: ['Постоянный голод', 'Слабость', 'Потеря веса'],
                 effectsEn: ['Constant hunger', 'Weakness', 'Weight loss'],
                 modifiers: { energy: -10, physical: -10 },
                 symptoms: 'Stomach constantly aching, thinking about food obsessively, mild weakness.',
             },
             moderate: {
-                threshold: { hoursSinceLastMeal: 48 },
+                threshold: { hoursSinceLastMeal: 72 },
                 effects: ['Мышечная атрофия', 'Апатия', 'Озноб'],
                 effectsEn: ['Muscle atrophy', 'Apathy', 'Chills'],
                 modifiers: { energy: -25, physical: -30, focus: -20 },
                 symptoms: 'Muscles visibly weaker, indifferent to surroundings, constantly cold.',
             },
             severe: {
-                threshold: { hoursSinceLastMeal: 72 },
+                threshold: { hoursSinceLastMeal: 120 },
                 effects: ['Органная недостаточность', 'Бред', 'Невозможность двигаться'],
                 effectsEn: ['Organ failure risk', 'Delirium', 'Unable to move'],
                 modifiers: { energy: -50, physical: -60, focus: -50 },
                 symptoms: 'Bedridden, hallucinations, organs shutting down, death approaching.',
             },
             critical: {
-                threshold: { hoursSinceLastMeal: 120 },
+                threshold: { hoursSinceLastMeal: 168 },
                 effects: ['Смерть неизбежна без помощи'],
                 effectsEn: ['Death imminent without intervention'],
                 modifiers: { energy: -80, physical: -90, focus: -70 },
@@ -85,7 +86,7 @@ export const DISEASE_DB = {
             },
         },
         cure: { satiety: 60, reserve: 500, hoursSinceLastMeal: 4 },
-        recovery: { mild: 24, moderate: 72, severe: 168, critical: 336 },
+        recovery: { mild: 6, moderate: 24, severe: 72, critical: 168 },
 
     },
 
@@ -306,7 +307,7 @@ export const DISEASE_DB = {
             severe: { effects: ['Почти все мысли — о еде', 'Эмоциональные срывы'], modifiers: { focus: -45 },
                 symptoms: 'Food is almost all the mind can hold; emotional outbursts, may take food without thinking.', cues: ['hands reach for food before thinking', 'tears up over a missed meal', 'hides a scrap in a pocket'] },
         },
-        recovery: { mild: 12, moderate: 48, severe: 120 },
+        recovery: { mild: 3, moderate: 24, severe: 72 },
     },
     hunger_apathy: {
         id: 'hunger_apathy', nameRu: 'Голодная апатия', nameEn: 'Starvation apathy', category: 'mental',
@@ -318,7 +319,7 @@ export const DISEASE_DB = {
             severe: { effects: ['Подавленность', 'Безразличие к себе'], modifiers: { focus: -35, energy: -20 },
                 symptoms: 'Deep low mood, indifference even to own safety; slow speech, long silences.', cues: ['long silence before answering', 'stares at nothing', 'doesn\'t flinch at danger'] },
         },
-        recovery: { mild: 24, moderate: 72, severe: 168 },
+        recovery: { mild: 12, moderate: 48, severe: 120 },
     },
     food_insecurity: {
         id: 'food_insecurity', nameRu: 'Пищевая тревожность', nameEn: 'Food insecurity anxiety', category: 'mental',
@@ -495,7 +496,11 @@ export function evaluateConditions(charData, hours = 0) {
     const progressed = [];
     const recovering = [];
 
-    evaluateDisease(charData, DISEASE_DB.hypoglycemia, hours, added, removed, progressed, recovering);
+    if (!hungerCap) evaluateDisease(charData, DISEASE_DB.hypoglycemia, hours, added, removed, progressed, recovering);
+    else if (charData.diseases.some(d => d.id === 'hypoglycemia')) {   // лёгкий режим: её нет (переключили режим)
+        charData.diseases = charData.diseases.filter(d => d.id !== 'hypoglycemia');
+        removed.push('hypoglycemia');
+    }
     evaluateDisease(charData, DISEASE_DB.dehydration_disease, hours, added, removed, progressed, recovering);
     evaluateDisease(charData, DISEASE_DB.starvation, hours, added, removed, progressed, recovering);
     evaluateMalnutrition(charData, hours, added, removed, progressed, recovering);
@@ -809,17 +814,21 @@ function evaluateExtraDiseases(c, hours, added, removed, progressed, recovering)
     customDisease(c, 'scurvy', np >= 60 ? 'severe' : np >= 45 ? 'moderate' : np >= 30 ? 'mild' : null, np === 0, ...args);
 
     // Пищевая одержимость
+    // Острое (часы) и хроническое (дни) разведены: сутки без еды — это сильный голод, а не болезнь.
+    // Мысли о еде — от двух суток без еды или нескольких дней недоедания; после нормальной еды
+    // проходят за часы, если недоедание не тянется днями
     customDisease(c, 'food_obsession',
-        (hslm >= 96 || days >= 10) ? 'severe' : (hslm >= 48 || days >= 5) ? 'moderate' : (hslm >= 26 || days >= 3) ? 'mild' : null,
-        hslm < 8 && days === 0, ...args);
+        (hslm >= 120 || days >= 10) ? 'severe' : (hslm >= 72 || days >= 6) ? 'moderate' : (hslm >= 40 || days >= 3) ? 'mild' : null,
+        hslm < 6 && c.satiety >= 50 && days < 3, ...args);
 
     // Голодная апатия
+    // Апатия — от долгого голода (трое суток без еды или неделя недоедания), не от пропущенного дня
     customDisease(c, 'hunger_apathy',
-        (hslm >= 120 || days >= 14) ? 'severe' : (hslm >= 72 || days >= 8) ? 'moderate' : (hslm >= 36 || days >= 4) ? 'mild' : null,
-        days <= 1 && hslm < 12 && c.satiety >= 50, ...args);
+        (hslm >= 168 || days >= 14) ? 'severe' : (hslm >= 120 || days >= 8) ? 'moderate' : (hslm >= 72 || days >= 5) ? 'mild' : null,
+        days < 5 && hslm < 12 && c.satiety >= 50, ...args);
 
     // Пищевая тревожность — след пережитого голода, держится неделями
-    if (hslm >= 60) c.starvationTrauma = true;
+    if (hslm >= 72) c.starvationTrauma = true;
     if (c.starvationTrauma || c.diseases.some(d => d.id === 'food_insecurity')) {
         const stage = (c.maxFastHours || 0) >= 120 ? 'moderate' : 'mild';
         const had = c.diseases.some(d => d.id === 'food_insecurity');
@@ -873,9 +882,14 @@ function evaluateEffects(c, hours, added, removed) {
     T('irritability', { on: c.satiety <= 20 && c.hoursSinceLastMeal >= 5 || c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering),
         off: c.satiety > 30 && !c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering) });
     T('overeating', { on: (c.recentIntake || 0) > g * 0.6, off: (c.recentIntake || 0) < g * 0.45 });
-    const starving = c.diseases.some(d => d.id === 'starvation');
-    // Замедленный обмен — приспособление тела, проходит не сразу, а через сутки нормального питания
-    T('slow_metabolism', { on: (c.daysWithDeficit || 0) >= 3 || starving, off: (c.daysWithDeficit || 0) === 0 && !starving, linger: 24 });
+    // Замедленный обмен — приспособление тела к нескольким дням недоедания (или к настоящему голоданию,
+    // от трёх суток), а не к одному пропущенному дню; проходит через сутки нормального питания
+    const starving = c.diseases.some(d => d.id === 'starvation' && d.severity !== 'mild' && !d.recovering);
+    T('slow_metabolism', { on: (c.daysWithDeficit || 0) >= 4 || starving, off: (c.daysWithDeficit || 0) <= 1 && !starving, linger: 24 });
+    // Острая слабость от голода: дрожь, лёгкое головокружение. Проходит, как только поели.
+    // В хардкоре при гипогликемии не нужна — та сильнее
+    const hypo = c.diseases.some(d => d.id === 'hypoglycemia' && !d.recovering);
+    T('hunger_weak', { on: (c.hoursSinceLastMeal || 0) >= 16 && c.satiety <= 12 && !hypo, off: c.satiety > 30 || hypo, linger: 0 });
 
     // Сон и силы
     const caffeinated = (c.caffeine || 0) >= 60;

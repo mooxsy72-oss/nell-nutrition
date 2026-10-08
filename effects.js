@@ -26,6 +26,13 @@ export const EFFECT_INFO = {
             'glances toward any source of water', 'swallowing feels dry and scratchy'],
         userCues: ['lips look dry', 'someone hands them water'],
     },
+    hunger_weak: {
+        name: 'Слабость от голода', kind: 'negative', icon: 'fa-person-falling', every: 1, shows: 2, gapH: 4, daily: false,
+        text: 'Дрожь в руках, лёгкое головокружение — проходит, как только поешь',
+        prompt: 'weak from hunger — shaky hands, a little light-headed, slower; passes soon after eating',
+        cues: ['steadies a hand on the table', 'a moment of dizziness when standing up', 'hands not quite steady'],
+        userCues: ['someone notices they look pale and pushes food toward them'],
+    },
     irritability: {
         name: 'Раздражительность', kind: 'negative', icon: 'fa-face-angry', every: 1, mental: true,
         text: 'Вспыльчивость, меньше терпения',
